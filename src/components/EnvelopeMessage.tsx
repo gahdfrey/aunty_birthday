@@ -1,7 +1,12 @@
 "use client";
 
-import { useEffect } from "react";
-import { motion, stagger, useAnimate } from "motion/react";
+import { useCallback, useEffect, useState } from "react";
+import dynamic from "next/dynamic";
+import { AnimatePresence, motion, useReducedMotion, type Variants } from "motion/react";
+import SceneErrorBoundary from "./SceneErrorBoundary";
+
+// three.js needs the browser, so the 3D envelope is never server-rendered.
+const EnvelopeStage = dynamic(() => import("./EnvelopeStage"), { ssr: false });
 
 const RECIPIENT = "Aunty";
 const PARAGRAPHS = [
@@ -11,61 +16,33 @@ const PARAGRAPHS = [
 ];
 const SIGN_OFF = "With all my love";
 
-// Gentle ease-out used for the big movements so they land softly.
 const EASE_OUT: [number, number, number, number] = [0.16, 1, 0.3, 1];
-const EASE_IN_OUT: [number, number, number, number] = [0.65, 0, 0.35, 1];
+
+const card: Variants = {
+  hidden: { opacity: 0, scale: 0.94, y: 24 },
+  shown: {
+    opacity: 1,
+    scale: 1,
+    y: 0,
+    transition: { duration: 0.8, ease: EASE_OUT, delayChildren: 0.25, staggerChildren: 0.13 },
+  },
+  exit: { opacity: 0, scale: 0.96, transition: { duration: 0.35 } },
+};
+
+const line: Variants = {
+  hidden: { opacity: 0, y: 12 },
+  shown: { opacity: 1, y: 0, transition: { duration: 0.6, ease: EASE_OUT } },
+};
+
+const closeButton: Variants = {
+  hidden: { opacity: 0, y: 10 },
+  shown: { opacity: 1, y: 0, transition: { duration: 0.5, delay: 1.4 } },
+};
 
 export default function EnvelopeMessage({ onClose }: { onClose: () => void }) {
-  const [scope, animate] = useAnimate<HTMLDivElement>();
-
-  useEffect(() => {
-    let cancelled = false;
-
-    async function play() {
-      await animate([
-        // Fly in from far away and zoom right up to the viewer.
-        [
-          ".envelope",
-          {
-            opacity: [0, 1],
-            scale: [0.08, 1.4],
-            rotateZ: [-28, 3],
-            rotateY: [-65, 0],
-            y: [260, 0],
-            filter: ["blur(14px)", "blur(0px)"],
-          },
-          { duration: 1.2, ease: EASE_OUT },
-        ],
-        // Back off to a comfortable size with a small tilt.
-        [".envelope", { scale: 0.9, rotateZ: 0, rotateX: [0, 14, 0] }, { duration: 0.9, ease: EASE_IN_OUT }],
-        [".seal", { scale: [1, 1.3, 0], opacity: [1, 1, 0] }, { duration: 0.5 }],
-        [".flap", { rotateX: [0, 180] }, { duration: 0.8, ease: EASE_IN_OUT }],
-      ]);
-      if (cancelled) return;
-
-      // Once open, the flap tucks behind the letter so the letter can slide out over it.
-      // Set directly: motion applies a sequenced zIndex from the very first frame.
-      const flap = scope.current.querySelector<HTMLElement>(".flap");
-      if (flap) flap.style.zIndex = "0";
-
-      await animate([
-        [".letter", { y: ["0%", "-62%"] }, { duration: 0.9, ease: EASE_OUT }],
-        [".envelope", { y: 360, opacity: 0, scale: 0.7 }, { duration: 0.7, ease: "easeIn", at: "+0.15" }],
-        [
-          ".letter-full",
-          { opacity: [0, 1], scale: [0.55, 1], y: [-80, 0], rotateX: [25, 0] },
-          { duration: 0.9, ease: EASE_OUT, at: "-0.45" },
-        ],
-        [".line", { opacity: [0, 1], y: [14, 0] }, { duration: 0.6, delay: stagger(0.15), at: "-0.3" }],
-        [".close-btn", { opacity: [0, 1], y: [10, 0] }, { duration: 0.4 }],
-      ]);
-    }
-
-    play();
-    return () => {
-      cancelled = true;
-    };
-  }, [animate, scope]);
+  const reduceMotion = useReducedMotion();
+  const [revealed, setRevealed] = useState(Boolean(reduceMotion));
+  const reveal = useCallback(() => setRevealed(true), []);
 
   useEffect(() => {
     const closeOnEscape = (event: KeyboardEvent) => {
@@ -77,77 +54,89 @@ export default function EnvelopeMessage({ onClose }: { onClose: () => void }) {
 
   return (
     <motion.div
-      ref={scope}
       role="dialog"
       aria-modal="true"
       aria-label={`A birthday message for ${RECIPIENT}`}
-      className="fixed inset-0 z-50 flex items-center justify-center overflow-hidden bg-[#0d0618]/75 px-4 backdrop-blur-md"
+      className="fixed inset-0 z-50 overflow-hidden bg-[radial-gradient(ellipse_at_center,rgba(74,29,94,0.94)_0%,rgba(13,6,24,0.98)_75%)]"
       initial={{ opacity: 0 }}
-      animate={{ opacity: 1 }}
+      animate={{ opacity: 1, transition: { duration: 0.5 } }}
       exit={{ opacity: 0, transition: { duration: 0.45 } }}
-      style={{ perspective: 1400 }}
     >
-      <div
-        className="envelope relative aspect-[3/2] w-[min(84vw,420px)] opacity-0"
-        // Its own perspective (instead of preserve-3d) keeps the flap flip 3D while z-index still controls layering.
-        style={{ perspective: 900 }}
-      >
-        <div className="absolute inset-0 rounded-lg bg-gradient-to-b from-[#d98aa2] to-[#c46f8a] shadow-2xl shadow-black/50" />
+      <AnimatePresence>
+        {!revealed && (
+          <motion.div
+            key="stage"
+            className="absolute inset-0"
+            exit={{ opacity: 0, transition: { duration: 0.7, ease: "easeInOut" } }}
+          >
+            <SceneErrorBoundary onError={reveal}>
+              <EnvelopeStage recipient={RECIPIENT} onReveal={reveal} />
+            </SceneErrorBoundary>
+            <button
+              type="button"
+              onClick={reveal}
+              className="absolute right-4 top-4 rounded-full border border-white/20 px-4 py-1.5 text-xs text-white/70 hover:bg-white/10 hover:text-white"
+            >
+              Skip
+            </button>
+          </motion.div>
+        )}
+      </AnimatePresence>
 
-        <div
-          className="flap absolute inset-x-0 top-0 z-[3] h-[56%] bg-gradient-to-b from-[#f4b6c7] to-[#e293ab]"
-          style={{
-            clipPath: "polygon(0 0, 100% 0, 50% 100%)",
-            transformOrigin: "top",
-          }}
-        />
+      <AnimatePresence>
+        {revealed && (
+          <motion.div
+            key="letter"
+            className="absolute inset-0 flex flex-col items-center justify-center gap-5 px-4"
+            initial="hidden"
+            animate="shown"
+            exit="exit"
+          >
+            <motion.article
+              variants={card}
+              className="max-h-[78dvh] w-[min(92vw,520px)] overflow-y-auto rounded-2xl border border-[#ead8c8] bg-[#fffaf2] px-6 py-8 text-[#4a2a3a] shadow-2xl shadow-black/50 sm:px-10 sm:py-10"
+            >
+              <motion.p
+                variants={line}
+                className="text-[0.65rem] uppercase tracking-[0.3em] text-[#b0708a] sm:text-xs"
+              >
+                A letter for you
+              </motion.p>
+              <motion.h2
+                variants={line}
+                className="mt-3 font-display text-3xl italic text-[#7a3550] sm:text-4xl"
+              >
+                Dear {RECIPIENT},
+              </motion.h2>
+              <motion.div
+                variants={line}
+                className="mt-4 h-px w-16 bg-gradient-to-r from-[#e79ab2] to-transparent"
+              />
+              {PARAGRAPHS.map((paragraph) => (
+                <motion.p
+                  key={paragraph}
+                  variants={line}
+                  className="mt-4 text-[0.95rem] leading-relaxed sm:text-base"
+                >
+                  {paragraph}
+                </motion.p>
+              ))}
+              <motion.p variants={line} className="mt-8 font-display text-lg italic text-[#7a3550]">
+                {SIGN_OFF} ♥
+              </motion.p>
+            </motion.article>
 
-        <div className="letter absolute inset-x-[6%] top-[7%] z-[1] h-[86%] rounded-md bg-[#fffaf2] p-[6%] shadow-md">
-          <p className="font-display text-lg italic text-[#7a3550] sm:text-xl">Dear {RECIPIENT},</p>
-          <div className="mt-3 space-y-2">
-            <div className="h-1.5 w-full rounded bg-[#ecdcd0]" />
-            <div className="h-1.5 w-5/6 rounded bg-[#ecdcd0]" />
-            <div className="h-1.5 w-2/3 rounded bg-[#ecdcd0]" />
-          </div>
-        </div>
-
-        <div
-          className="absolute inset-0 z-[2] rounded-b-lg bg-gradient-to-t from-[#f0a5bb] to-[#f7c3d1]"
-          style={{ clipPath: "polygon(0 0, 50% 54%, 100% 0, 100% 100%, 0 100%)" }}
-        />
-
-        <div className="absolute left-1/2 top-[56%] z-[4] w-[15%] -translate-x-1/2 -translate-y-1/2">
-          <div className="seal flex aspect-square items-center justify-center rounded-full bg-gradient-to-br from-[#c81d4a] to-[#8e0f30] text-xl text-amber-200 shadow-lg ring-2 ring-[#a3173b]/60 sm:text-2xl">
-            ♥
-          </div>
-        </div>
-      </div>
-
-      <div className="absolute inset-0 flex flex-col items-center justify-center gap-5 px-4 pointer-events-none">
-        <article className="letter-full pointer-events-auto max-h-[78dvh] w-[min(92vw,520px)] overflow-y-auto rounded-2xl border border-[#ead8c8] bg-[#fffaf2] px-6 py-8 text-[#4a2a3a] opacity-0 shadow-2xl shadow-black/50 sm:px-10 sm:py-10">
-          <p className="line text-[0.65rem] uppercase tracking-[0.3em] text-[#b0708a] sm:text-xs">
-            A letter for you
-          </p>
-          <h2 className="line mt-3 font-display text-3xl italic text-[#7a3550] sm:text-4xl">
-            Dear {RECIPIENT},
-          </h2>
-          <div className="line mt-4 h-px w-16 bg-gradient-to-r from-[#e79ab2] to-transparent" />
-          {PARAGRAPHS.map((paragraph) => (
-            <p key={paragraph} className="line mt-4 text-[0.95rem] leading-relaxed sm:text-base">
-              {paragraph}
-            </p>
-          ))}
-          <p className="line mt-8 font-display text-lg italic text-[#7a3550]">{SIGN_OFF} ♥</p>
-        </article>
-
-        <button
-          type="button"
-          onClick={onClose}
-          className="close-btn pointer-events-auto rounded-full border border-white/25 bg-white/10 px-6 py-2.5 text-sm font-medium text-white opacity-0 backdrop-blur hover:bg-white/20"
-        >
-          Close letter
-        </button>
-      </div>
+            <motion.button
+              type="button"
+              variants={closeButton}
+              onClick={onClose}
+              className="rounded-full border border-white/25 bg-white/10 px-6 py-2.5 text-sm font-medium text-white hover:bg-white/20"
+            >
+              Close letter
+            </motion.button>
+          </motion.div>
+        )}
+      </AnimatePresence>
     </motion.div>
   );
 }

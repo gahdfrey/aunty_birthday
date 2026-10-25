@@ -251,10 +251,12 @@ function ResponsiveCamera() {
   return null;
 }
 
-export default function BirthdayScene({ blown }: { blown: boolean }) {
+export default function BirthdayScene({ blown, paused }: { blown: boolean; paused: boolean }) {
   return (
     <Canvas
       shadows
+      // Stop rendering while the letter is open so its animation gets the whole GPU.
+      frameloop={paused ? "never" : "always"}
       dpr={[1, 2]}
       camera={{ position: [0, 2.6, 9.5], fov: 42 }}
       gl={{ alpha: true, antialias: true }}

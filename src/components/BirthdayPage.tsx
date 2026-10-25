@@ -4,6 +4,7 @@ import { useCallback, useState } from "react";
 import dynamic from "next/dynamic";
 import { AnimatePresence, motion } from "motion/react";
 import EnvelopeMessage from "./EnvelopeMessage";
+import SceneErrorBoundary from "./SceneErrorBoundary";
 
 // three.js needs the browser, so the scene is never server-rendered.
 const BirthdayScene = dynamic(() => import("./BirthdayScene"), { ssr: false });
@@ -37,7 +38,9 @@ export default function BirthdayPage() {
   return (
     <main className="relative h-dvh w-full overflow-hidden bg-[radial-gradient(ellipse_at_top,#4a1d5e_0%,#1d0b2e_55%,#0d0618_100%)] text-white">
       <div className="absolute inset-0">
-        <BirthdayScene blown={blown} />
+        <SceneErrorBoundary>
+          <BirthdayScene blown={blown} paused={letterOpen} />
+        </SceneErrorBoundary>
       </div>
 
       <div className="pointer-events-none absolute inset-x-0 top-0 flex flex-col items-center px-4 pt-10 text-center sm:pt-14">
