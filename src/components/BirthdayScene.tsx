@@ -1,14 +1,8 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { Canvas, useFrame, useThree } from "@react-three/fiber";
-import {
-  ContactShadows,
-  Float,
-  Line,
-  OrbitControls,
-  Sparkles,
-} from "@react-three/drei";
+import { ContactShadows, Float, Line, OrbitControls, PerformanceMonitor, Sparkles } from "@react-three/drei";
 import * as THREE from "three";
 
 const PALETTE = ["#ff6b9d", "#ffd166", "#06d6a0", "#4cc9f0", "#b388ff", "#ff9f68"];
@@ -25,63 +19,136 @@ const CAKE_TOP = TIERS.reduce((sum, tier) => sum + tier.height, 0);
 const CANDLE_HEIGHT = 0.45;
 const CANDLE_COUNT = 5;
 
+const BALLOONS: { position: [number, number, number]; color: string }[] = [
+  { position: [-3.2, 2.4, -1], color: "#ff6b9d" },
+  { position: [3.1, 2.8, -1.4], color: "#4cc9f0" },
+  { position: [-2.3, 3.6, -2.6], color: "#ffd166" },
+  { position: [2.4, 1.6, -0.2], color: "#b388ff" },
+  { position: [0.6, 4.2, -3.2], color: "#06d6a0" },
+];
+
+const clamp01 = (x: number) => Math.min(1, Math.max(0, x));
+const easeOutCubic = (p: number) => 1 - (1 - p) ** 3;
+const easeOutBack = (p: number) => 1 + 2.2 * (p - 1) ** 3 + 1.2 * (p - 1) ** 2;
+
+// Time since this component's first frame. Each step is capped, so a slow frame on a phone
+// (shader compile, garbage collection) slows the intro down briefly instead of making it jump ahead.
+function useIntroTime() {
+  const elapsed = useRef(0);
+  useFrame((_, delta) => {
+    elapsed.current += Math.min(delta, 1 / 30);
+  });
+  return elapsed;
+}
+
+// Rises, grows and turns into place once the scene appears.
+function CakeIntro({ children }: { children: ReactNode }) {
+  const group = useRef<THREE.Group>(null);
+  const time = useIntroTime();
+
+  useFrame(() => {
+    if (!group.current) return;
+    const p = clamp01((time.current - 0.35) / 1.8);
+    const eased = easeOutBack(p);
+    group.current.position.y = (1 - eased) * -2.5;
+    group.current.scale.setScalar(THREE.MathUtils.lerp(0.6, 1, eased));
+    group.current.rotation.y = (1 - easeOutCubic(p)) * -1.2;
+  });
+
+  return <group ref={group}>{children}</group>;
+}
+
+// Drifts up from below the frame, staggered by `delay`.
+function BalloonIntro({ delay, children }: { delay: number; children: ReactNode }) {
+  const group = useRef<THREE.Group>(null);
+  const time = useIntroTime();
+
+  useFrame(() => {
+    if (!group.current) return;
+    group.current.position.y = (1 - easeOutCubic(clamp01((time.current - delay) / 2.2))) * -9;
+  });
+
+  return (
+    <group ref={group} position={[0, -9, 0]}>
+      {children}
+    </group>
+  );
+}
+
 function Cake() {
   return (
     <group>
-      <mesh position={[0, -0.05, 0]} receiveShadow>
-        <cylinderGeometry args={[2.05, 2.1, 0.1, 64]} />
+      <mesh position={[0, -0.05, 0]}>
+        <cylinderGeometry args={[2.05, 2.1, 0.1, 48]} />
         <meshStandardMaterial color="#e9e6f2" metalness={0.6} roughness={0.25} />
       </mesh>
       {TIERS.map((tier, i) => {
         const top = TIER_BASES[i] + tier.height;
         return (
           <group key={i}>
-            <mesh position={[0, TIER_BASES[i] + tier.height / 2, 0]} castShadow receiveShadow>
-              <cylinderGeometry args={[tier.radius, tier.radius, tier.height, 64]} />
+            <mesh position={[0, TIER_BASES[i] + tier.height / 2, 0]}>
+              <cylinderGeometry args={[tier.radius, tier.radius, tier.height, 48]} />
               <meshStandardMaterial color={tier.color} roughness={0.55} />
             </mesh>
             <mesh position={[0, top, 0]} rotation={[Math.PI / 2, 0, 0]}>
-              <torusGeometry args={[tier.radius, 0.07, 16, 80]} />
+              <torusGeometry args={[tier.radius, 0.07, 12, 64]} />
               <meshStandardMaterial color="#ffffff" roughness={0.35} />
             </mesh>
-            <Sprinkles radius={tier.radius - 0.15} y={top + 0.01} seed={i} />
           </group>
         );
       })}
+      <Sprinkles />
     </group>
   );
 }
 
-// Seeded so the sprinkles land in the same spots on every render.
-function createSprinkles(radius: number, y: number, seed: number) {
-  let s = seed * 9301 + 49297;
+// Seeded so the sprinkles land in the same spots on every load.
+function createSprinkles() {
+  let s = 49297;
   const random = () => {
     s = (s * 9301 + 49297) % 233280;
     return s / 233280;
   };
-  return Array.from({ length: Math.round(radius * 30) }, () => {
-    const angle = random() * Math.PI * 2;
-    const r = Math.sqrt(random()) * radius;
-    return {
-      position: [Math.cos(angle) * r, y, Math.sin(angle) * r] as const,
-      rotation: [Math.PI / 2, 0, random() * Math.PI] as const,
-      color: PALETTE[Math.floor(random() * PALETTE.length)],
-    };
+  return TIERS.flatMap((tier, i) => {
+    const radius = tier.radius - 0.15;
+    const y = TIER_BASES[i] + tier.height + 0.01;
+    return Array.from({ length: Math.round(radius * 30) }, () => {
+      const angle = random() * Math.PI * 2;
+      const r = Math.sqrt(random()) * radius;
+      return {
+        position: new THREE.Vector3(Math.cos(angle) * r, y, Math.sin(angle) * r),
+        rotation: new THREE.Euler(Math.PI / 2, 0, random() * Math.PI),
+        color: PALETTE[Math.floor(random() * PALETTE.length)],
+      };
+    });
   });
 }
 
-function Sprinkles({ radius, y, seed }: { radius: number; y: number; seed: number }) {
-  const sprinkles = useMemo(() => createSprinkles(radius, y, seed), [radius, y, seed]);
+// All sprinkles share one instanced mesh: one draw call instead of ~90, which matters on phones.
+function Sprinkles() {
+  const mesh = useRef<THREE.InstancedMesh>(null);
+  const [sprinkles] = useState(createSprinkles);
+
+  useEffect(() => {
+    if (!mesh.current) return;
+    const dummy = new THREE.Object3D();
+    const color = new THREE.Color();
+    sprinkles.forEach((sprinkle, i) => {
+      dummy.position.copy(sprinkle.position);
+      dummy.rotation.copy(sprinkle.rotation);
+      dummy.updateMatrix();
+      mesh.current!.setMatrixAt(i, dummy.matrix);
+      mesh.current!.setColorAt(i, color.set(sprinkle.color));
+    });
+    mesh.current.instanceMatrix.needsUpdate = true;
+    mesh.current.instanceColor!.needsUpdate = true;
+  }, [sprinkles]);
 
   return (
-    <>
-      {sprinkles.map((sprinkle, i) => (
-        <mesh key={i} position={sprinkle.position} rotation={sprinkle.rotation}>
-          <capsuleGeometry args={[0.018, 0.07, 4, 8]} />
-          <meshStandardMaterial color={sprinkle.color} />
-        </mesh>
-      ))}
-    </>
+    <instancedMesh ref={mesh} args={[undefined, undefined, sprinkles.length]}>
+      <capsuleGeometry args={[0.018, 0.07, 4, 8]} />
+      <meshStandardMaterial />
+    </instancedMesh>
   );
 }
 
@@ -112,7 +179,7 @@ function Candles({ blown }: { blown: boolean }) {
         const z = Math.sin(angle) * 0.42;
         return (
           <group key={i} position={[x, 0, z]}>
-            <mesh position={[0, CANDLE_HEIGHT / 2, 0]} castShadow>
+            <mesh position={[0, CANDLE_HEIGHT / 2, 0]}>
               <cylinderGeometry args={[0.045, 0.045, CANDLE_HEIGHT, 16]} />
               <meshStandardMaterial color={PALETTE[i % PALETTE.length]} roughness={0.4} />
             </mesh>
@@ -160,8 +227,8 @@ function Balloon({ position, color }: { position: [number, number, number]; colo
 
   return (
     <Float speed={1.6} rotationIntensity={0.4} floatIntensity={1.2} position={position}>
-      <mesh scale={[1, 1.18, 1]} castShadow>
-        <sphereGeometry args={[0.5, 48, 48]} />
+      <mesh scale={[1, 1.18, 1]}>
+        <sphereGeometry args={[0.5, 32, 32]} />
         <meshPhysicalMaterial color={color} roughness={0.15} clearcoat={1} clearcoatRoughness={0.1} />
       </mesh>
       <mesh position={[0, -0.6, 0]} rotation={[Math.PI, 0, 0]}>
@@ -202,11 +269,7 @@ function Confetti({ active }: { active: boolean }) {
   useEffect(() => {
     if (!active) return;
     pieces.forEach((piece) => {
-      piece.position.set(
-        (Math.random() - 0.5) * 12,
-        4 + Math.random() * 8,
-        (Math.random() - 0.5) * 8,
-      );
+      piece.position.set((Math.random() - 0.5) * 12, 4 + Math.random() * 8, (Math.random() - 0.5) * 8);
     });
   }, [active, pieces]);
 
@@ -251,46 +314,91 @@ function ResponsiveCamera() {
   return null;
 }
 
-export default function BirthdayScene({ blown, paused }: { blown: boolean; paused: boolean }) {
+// Compiles every shader up front, then reports the first rendered frame.
+// Without this, the GPU compiles shaders mid-animation and the first second stutters.
+// It waits a few frames because some effects (like the contact shadow) only compile on their first render.
+function SceneReady({ onReady }: { onReady: () => void }) {
+  const { gl, scene, camera } = useThree();
+  const frames = useRef(0);
+
+  useEffect(() => {
+    gl.compile(scene, camera);
+  }, [gl, scene, camera]);
+
+  useFrame(() => {
+    frames.current += 1;
+    if (frames.current === 3) onReady();
+  });
+
+  return null;
+}
+
+export default function BirthdayScene({
+  blown,
+  paused,
+  onReady,
+}: {
+  blown: boolean;
+  paused: boolean;
+  onReady?: () => void;
+}) {
+  const [shown, setShown] = useState(false);
+  // Start at up to 1.5x pixel density and drop to 1x if the device can't keep up.
+  const [dpr, setDpr] = useState(1.5);
+
   return (
-    <Canvas
-      shadows
-      // Stop rendering while the letter is open so its animation gets the whole GPU.
-      frameloop={paused ? "never" : "always"}
-      dpr={[1, 2]}
-      camera={{ position: [0, 2.6, 9.5], fov: 42 }}
-      gl={{ alpha: true, antialias: true }}
+    <div
+      className="h-full w-full transition-opacity duration-1000 ease-out"
+      style={{ opacity: shown ? 1 : 0 }}
     >
-      <ResponsiveCamera />
-      <ambientLight intensity={0.55} />
-      <directionalLight position={[4, 8, 5]} intensity={1.4} castShadow />
-      <hemisphereLight args={["#ffd6e8", "#2a1240", 0.6]} />
+      <Canvas
+        // Stop rendering while the letter is open so its animation gets the whole GPU.
+        frameloop={paused ? "never" : "always"}
+        dpr={dpr}
+        camera={{ position: [0, 2.6, 9.5], fov: 42 }}
+        gl={{ alpha: true, antialias: true, powerPreference: "high-performance" }}
+      >
+        <PerformanceMonitor onDecline={() => setDpr(1)} onIncline={() => setDpr(1.5)} />
+        <ResponsiveCamera />
+        <ambientLight intensity={0.55} />
+        <directionalLight position={[4, 8, 5]} intensity={1.4} />
+        <hemisphereLight args={["#ffd6e8", "#2a1240", 0.6]} />
 
-      <group position={[0, -1.5, 0]} scale={0.85}>
-        <Cake />
-        <Candles blown={blown} />
-        <ContactShadows position={[0, -0.1, 0]} opacity={0.45} scale={10} blur={2.4} far={3} />
-      </group>
+        <group position={[0, -1.5, 0]} scale={0.85}>
+          <CakeIntro>
+            <Cake />
+            <Candles blown={blown} />
+          </CakeIntro>
+          {/* The shadow is drawn for the first few seconds while the cake settles, then frozen. */}
+          <ContactShadows position={[0, -0.1, 0]} opacity={0.45} scale={10} blur={2.4} far={3} frames={240} />
+        </group>
 
-      <Balloon position={[-3.2, 2.4, -1]} color="#ff6b9d" />
-      <Balloon position={[3.1, 2.8, -1.4]} color="#4cc9f0" />
-      <Balloon position={[-2.3, 3.6, -2.6]} color="#ffd166" />
-      <Balloon position={[2.4, 1.6, -0.2]} color="#b388ff" />
-      <Balloon position={[0.6, 4.2, -3.2]} color="#06d6a0" />
+        {BALLOONS.map((balloon, i) => (
+          <BalloonIntro key={balloon.color} delay={0.4 + i * 0.18}>
+            <Balloon position={balloon.position} color={balloon.color} />
+          </BalloonIntro>
+        ))}
 
-      <Sparkles count={80} scale={[10, 6, 6]} position={[0, 2, -1]} size={3} speed={0.35} color="#ffe8a3" />
-      <Confetti active={blown} />
+        <Sparkles count={80} scale={[10, 6, 6]} position={[0, 2, -1]} size={3} speed={0.35} color="#ffe8a3" />
+        <Confetti active={blown} />
 
-      <OrbitControls
-        target={[0, 0.6, 0]}
-        enablePan={false}
-        minDistance={6}
-        maxDistance={15}
-        minPolarAngle={Math.PI / 5}
-        maxPolarAngle={Math.PI / 2.1}
-        autoRotate
-        autoRotateSpeed={0.6}
-      />
-    </Canvas>
+        <OrbitControls
+          target={[0, 0.6, 0]}
+          enablePan={false}
+          minDistance={6}
+          maxDistance={15}
+          minPolarAngle={Math.PI / 5}
+          maxPolarAngle={Math.PI / 2.1}
+          autoRotate
+          autoRotateSpeed={0.6}
+        />
+        <SceneReady
+          onReady={() => {
+            setShown(true);
+            onReady?.();
+          }}
+        />
+      </Canvas>
+    </div>
   );
 }

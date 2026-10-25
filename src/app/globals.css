@@ -10,3 +10,59 @@ body {
   color: #ffffff;
   font-family: var(--font-geist-sans), Arial, Helvetica, sans-serif;
 }
+
+/* Entrance animations run in CSS so they start on first paint and stay smooth
+   while the 3D scene's JavaScript is still downloading and parsing. */
+@keyframes rise-in {
+  from {
+    opacity: 0;
+    transform: translateY(40px) rotate(-8deg);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+@keyframes fade-up {
+  from {
+    opacity: 0;
+    transform: translateY(16px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+@keyframes fade-down {
+  from {
+    opacity: 0;
+    transform: translateY(-10px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+.animate-rise-in {
+  display: inline-block;
+  animation: rise-in 0.8s cubic-bezier(0.34, 1.56, 0.64, 1) both;
+}
+
+.animate-fade-up {
+  animation: fade-up 0.8s cubic-bezier(0.16, 1, 0.3, 1) both;
+}
+
+.animate-fade-down {
+  animation: fade-down 0.8s cubic-bezier(0.16, 1, 0.3, 1) both;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .animate-rise-in,
+  .animate-fade-up,
+  .animate-fade-down {
+    animation: none;
+  }
+}

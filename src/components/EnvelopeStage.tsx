@@ -1,7 +1,7 @@
 "use client";
 
-import { useMemo, useRef, useState } from "react";
-import { Canvas, useFrame } from "@react-three/fiber";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { Canvas, useFrame, useThree } from "@react-three/fiber";
 import { Sparkles } from "@react-three/drei";
 import * as THREE from "three";
 
@@ -99,8 +99,9 @@ function Envelope({ recipient, onReveal }: { recipient: string; onReveal: () => 
   const seal = useRef<THREE.Group>(null);
   const letter = useRef<THREE.Mesh>(null);
   const burst = useRef<THREE.InstancedMesh>(null);
-  const startedAt = useRef<number | null>(null);
+  const elapsed = useRef(0);
   const revealed = useRef(false);
+  const { gl, scene, camera } = useThree();
 
   const [texture] = useState(() => createLetterTexture(recipient));
   const [burstPieces] = useState(createBurst);
@@ -121,11 +122,16 @@ function Envelope({ recipient, onReveal }: { recipient: string; onReveal: () => 
   );
 
   // The whole sequence is driven from one clock, so nothing re-renders React mid-animation.
-  useFrame((state) => {
+  // Compile shaders before the first frame so the fly-in doesn't stutter.
+  useEffect(() => {
+    gl.compile(scene, camera);
+  }, [gl, scene, camera]);
+
+  useFrame((state, delta) => {
     if (!envelope.current || !flapHinge.current || !seal.current || !letter.current || !burst.current) return;
-    const now = state.clock.elapsedTime;
-    startedAt.current ??= now;
-    const t = now - startedAt.current;
+    // Capped steps: a slow frame briefly slows the sequence down instead of making it jump ahead.
+    elapsed.current += Math.min(delta, 1 / 30);
+    const t = elapsed.current;
     const env = envelope.current;
 
     // Shrink everything on narrow screens so the envelope always fits.
@@ -262,7 +268,7 @@ function Envelope({ recipient, onReveal }: { recipient: string; onReveal: () => 
 export default function EnvelopeStage({ recipient, onReveal }: { recipient: string; onReveal: () => void }) {
   return (
     <Canvas
-      dpr={[1, 1.75]}
+      dpr={[1, 1.5]}
       camera={{ position: [0, 0, 8], fov: 40 }}
       gl={{ antialias: true, alpha: true, powerPreference: "high-performance" }}
     >
