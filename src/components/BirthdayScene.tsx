@@ -249,6 +249,7 @@ function createConfettiPieces() {
     spin: new THREE.Vector3(Math.random() * 4, Math.random() * 4, Math.random() * 4),
     speed: 0.6 + Math.random() * 0.9,
     sway: Math.random() * Math.PI * 2,
+    falling: false,
   }));
 }
 
@@ -266,30 +267,41 @@ function Confetti({ active }: { active: boolean }) {
     mesh.current.instanceColor!.needsUpdate = true;
   }, [pieces]);
 
+  // Pieces still in the air keep falling; only the ones that already landed start again from above.
   useEffect(() => {
     if (!active) return;
     pieces.forEach((piece) => {
+      if (piece.falling) return;
+      piece.falling = true;
       piece.position.set((Math.random() - 0.5) * 12, 4 + Math.random() * 8, (Math.random() - 0.5) * 8);
     });
   }, [active, pieces]);
 
   useFrame(({ clock }, delta) => {
     if (!mesh.current) return;
-    mesh.current.visible = active;
-    if (!active) return;
     const t = clock.elapsedTime;
+    let anyFalling = false;
     pieces.forEach((piece, i) => {
-      piece.position.y -= piece.speed * delta;
-      piece.position.x += Math.sin(t * 1.5 + piece.sway) * 0.3 * delta;
-      if (piece.position.y < -1) piece.position.y = 7 + Math.random() * 2;
-      piece.rotation.x += piece.spin.x * delta;
-      piece.rotation.y += piece.spin.y * delta;
-      piece.rotation.z += piece.spin.z * delta;
+      if (piece.falling) {
+        piece.position.y -= piece.speed * delta;
+        piece.position.x += Math.sin(t * 1.5 + piece.sway) * 0.3 * delta;
+        piece.rotation.x += piece.spin.x * delta;
+        piece.rotation.y += piece.spin.y * delta;
+        piece.rotation.z += piece.spin.z * delta;
+        // Once switched off, each piece finishes its fall instead of looping back to the top.
+        if (piece.position.y < -1) {
+          if (active) piece.position.y = 7 + Math.random() * 2;
+          else piece.falling = false;
+        }
+      }
+      anyFalling ||= piece.falling;
       dummy.position.copy(piece.position);
       dummy.rotation.copy(piece.rotation);
+      dummy.scale.setScalar(piece.falling ? 1 : 0);
       dummy.updateMatrix();
       mesh.current!.setMatrixAt(i, dummy.matrix);
     });
+    mesh.current.visible = anyFalling;
     mesh.current.instanceMatrix.needsUpdate = true;
   });
 
