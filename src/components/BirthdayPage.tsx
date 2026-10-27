@@ -1,15 +1,21 @@
 "use client";
 
-import { useCallback, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import dynamic from "next/dynamic";
 import { AnimatePresence, motion } from "motion/react";
+import { birthdayAudio } from "@/lib/birthdayAudio";
 import EnvelopeMessage from "./EnvelopeMessage";
 import SceneErrorBoundary from "./SceneErrorBoundary";
+import SoundToggle from "./SoundToggle";
 
 // three.js needs the browser, so the scene is never server-rendered.
 const BirthdayScene = dynamic(() => import("./BirthdayScene"), { ssr: false });
 
 const NAME = "Aunty";
+// How long the "close your eyes and make a wish" moment lasts before the candles go out.
+const WISH_SECONDS = 3.2;
+
+type WishPhase = "idle" | "wishing" | "blown";
 
 function AnimatedWords({ text, delay = 0, className }: { text: string; delay?: number; className?: string }) {
   return (
@@ -24,7 +30,9 @@ function AnimatedWords({ text, delay = 0, className }: { text: string; delay?: n
 }
 
 export default function BirthdayPage() {
-  const [blown, setBlown] = useState(false);
+  const [phase, setPhase] = useState<WishPhase>("idle");
+  const [celebrating, setCelebrating] = useState(false);
+  const blown = phase === "blown";
   const [letterOpen, setLetterOpen] = useState(false);
   const [letterRun, setLetterRun] = useState(0);
   const [envelopeMounted, setEnvelopeMounted] = useState(false);
@@ -39,6 +47,35 @@ export default function BirthdayPage() {
   const prepareEnvelope = useCallback(() => {
     setTimeout(() => setEnvelopeMounted(true), 2500);
   }, []);
+
+  // The wish moment: music softens while the visitor wishes, then the candles go out.
+  useEffect(() => {
+    if (phase !== "wishing") return;
+    birthdayAudio.duck(true);
+    const timer = setTimeout(() => {
+      setPhase("blown");
+      setCelebrating(true);
+      birthdayAudio.blowOut();
+      birthdayAudio.duck(false);
+    }, WISH_SECONDS * 1000);
+    return () => clearTimeout(timer);
+  }, [phase]);
+
+  useEffect(() => {
+    if (!celebrating) return;
+    const timer = setTimeout(() => setCelebrating(false), 2800);
+    return () => clearTimeout(timer);
+  }, [celebrating]);
+
+  const toggleCandles = () => {
+    if (phase === "idle") {
+      setPhase("wishing");
+    } else if (phase === "blown") {
+      setPhase("idle");
+      setCelebrating(false);
+      birthdayAudio.light();
+    }
+  };
 
   return (
     <main className="relative h-dvh w-full overflow-hidden bg-[radial-gradient(ellipse_at_top,#4a1d5e_0%,#1d0b2e_55%,#0d0618_100%)] text-white">
@@ -62,6 +99,64 @@ export default function BirthdayPage() {
         </h1>
       </div>
 
+      <AnimatePresence>
+        {phase === "wishing" && (
+          <motion.div
+            key="wishing"
+            className="pointer-events-none absolute inset-0 flex flex-col items-center justify-center bg-[radial-gradient(ellipse_at_center,rgba(13,6,24,0.1)_0%,rgba(13,6,24,0.75)_80%)] px-6 text-center"
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0, transition: { duration: 0.5 } }}
+            transition={{ duration: 0.6 }}
+          >
+            <motion.p
+              className="text-xs uppercase tracking-[0.35em] text-pink-200/80 sm:text-sm"
+              initial={{ opacity: 0, y: 8 }}
+              animate={{ opacity: 1, y: 0 }}
+              transition={{ delay: 0.2, duration: 0.6 }}
+            >
+              Close your eyes
+            </motion.p>
+            <motion.p
+              className="mt-2 font-display text-3xl italic text-amber-100 sm:text-5xl"
+              initial={{ opacity: 0, y: 10 }}
+              animate={{ opacity: 1, y: 0 }}
+              transition={{ delay: 0.7, duration: 0.7 }}
+            >
+              and make a wish…
+            </motion.p>
+            <div className="mt-6 h-1 w-40 overflow-hidden rounded-full bg-white/15 sm:w-56">
+              <motion.div
+                className="h-full origin-left rounded-full bg-gradient-to-r from-pink-400 to-amber-300"
+                initial={{ scaleX: 0 }}
+                animate={{ scaleX: 1 }}
+                transition={{ duration: WISH_SECONDS, ease: "linear" }}
+              />
+            </div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+
+      <AnimatePresence>
+        {celebrating && (
+          <motion.div
+            key="celebrate"
+            className="pointer-events-none absolute inset-x-0 top-[36%] flex justify-center px-6 text-center"
+            initial={{ opacity: 0, scale: 0.6, y: 20 }}
+            animate={{ opacity: 1, scale: 1, y: 0 }}
+            exit={{ opacity: 0, scale: 1.08, y: -16, transition: { duration: 0.5 } }}
+            transition={{ type: "spring", stiffness: 220, damping: 16 }}
+          >
+            <div>
+              <p className="font-display text-4xl text-amber-100 drop-shadow-[0_4px_24px_rgba(255,107,157,0.6)] sm:text-6xl">
+                Wish made! 🎉
+              </p>
+              <p className="mt-2 text-sm text-white/85 sm:text-base">May every bit of it come true</p>
+            </div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+
       <div className="absolute inset-x-0 bottom-0 flex flex-col items-center gap-3 px-4 pb-[max(1.5rem,env(safe-area-inset-bottom))] text-center sm:gap-4 sm:pb-10">
         <AnimatePresence mode="wait" initial={false}>
           {blown ? (
@@ -75,7 +170,7 @@ export default function BirthdayPage() {
             >
               Your wish is on its way ✨
             </motion.p>
-          ) : (
+          ) : phase === "idle" ? (
             <motion.p
               key="hint"
               className="animate-fade-up text-xs text-white/60 [animation-delay:1.8s] sm:text-sm"
@@ -85,19 +180,24 @@ export default function BirthdayPage() {
             >
               Drag to look around the cake
             </motion.p>
-          )}
+          ) : null}
         </AnimatePresence>
 
         {/* Plain CSS entrance: it plays on first paint, before React has even loaded. */}
         <div className="animate-fade-up flex w-full max-w-xs flex-col gap-3 [animation-delay:1.6s] sm:w-auto sm:max-w-none sm:flex-row">
           <motion.button
             type="button"
-            onClick={() => setBlown((b) => !b)}
-            className="rounded-full bg-gradient-to-r from-pink-500 to-amber-400 px-7 py-3 text-sm font-semibold text-white shadow-lg shadow-pink-500/30 sm:text-base"
+            onClick={toggleCandles}
+            disabled={phase === "wishing"}
+            className="rounded-full bg-gradient-to-r from-pink-500 to-amber-400 px-7 py-3 text-sm font-semibold text-white shadow-lg shadow-pink-500/30 disabled:opacity-80 sm:text-base"
             whileHover={{ scale: 1.05 }}
             whileTap={{ scale: 0.95 }}
           >
-            {blown ? "Light the candles again" : "Make a wish & blow the candles"}
+            {phase === "wishing"
+              ? "Making a wish…"
+              : blown
+                ? "Light the candles again"
+                : "Make a wish & blow the candles"}
           </motion.button>
           {/* Solid tint instead of backdrop blur: blurring over a live 3D canvas is very costly on phones. */}
           <motion.button
@@ -112,6 +212,7 @@ export default function BirthdayPage() {
         </div>
       </div>
 
+      <SoundToggle />
       {envelopeMounted && <EnvelopeMessage open={letterOpen} runId={letterRun} onClose={closeLetter} />}
     </main>
   );
