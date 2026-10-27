@@ -26,17 +26,25 @@ function AnimatedWords({ text, delay = 0, className }: { text: string; delay?: n
 export default function BirthdayPage() {
   const [blown, setBlown] = useState(false);
   const [letterOpen, setLetterOpen] = useState(false);
+  const [letterRun, setLetterRun] = useState(0);
+  const [envelopeMounted, setEnvelopeMounted] = useState(false);
   const closeLetter = useCallback(() => setLetterOpen(false), []);
-  // Fetch the envelope's 3D code in the background once the cake is showing, so "Read message" opens instantly.
-  const preloadEnvelope = useCallback(() => {
-    import("./EnvelopeStage");
+  const openLetter = () => {
+    setLetterRun((run) => run + 1);
+    setEnvelopeMounted(true);
+    setLetterOpen(true);
+  };
+  // Prepare the envelope's 3D scene in the background once the cake's intro has finished,
+  // so "Read message" plays instantly without competing with the intro for the GPU.
+  const prepareEnvelope = useCallback(() => {
+    setTimeout(() => setEnvelopeMounted(true), 2500);
   }, []);
 
   return (
     <main className="relative h-dvh w-full overflow-hidden bg-[radial-gradient(ellipse_at_top,#4a1d5e_0%,#1d0b2e_55%,#0d0618_100%)] text-white">
       <div className="absolute inset-0">
         <SceneErrorBoundary>
-          <BirthdayScene blown={blown} paused={letterOpen} onReady={preloadEnvelope} />
+          <BirthdayScene blown={blown} paused={letterOpen} onReady={prepareEnvelope} />
         </SceneErrorBoundary>
       </div>
 
@@ -94,7 +102,7 @@ export default function BirthdayPage() {
           {/* Solid tint instead of backdrop blur: blurring over a live 3D canvas is very costly on phones. */}
           <motion.button
             type="button"
-            onClick={() => setLetterOpen(true)}
+            onClick={openLetter}
             className="rounded-full border border-white/25 bg-[#2a1240]/70 px-7 py-3 text-sm font-semibold text-white sm:text-base"
             whileHover={{ scale: 1.05, backgroundColor: "rgba(74,29,94,0.85)" }}
             whileTap={{ scale: 0.95 }}
@@ -104,9 +112,7 @@ export default function BirthdayPage() {
         </div>
       </div>
 
-      <AnimatePresence>
-        {letterOpen && <EnvelopeMessage onClose={closeLetter} />}
-      </AnimatePresence>
+      {envelopeMounted && <EnvelopeMessage open={letterOpen} runId={letterRun} onClose={closeLetter} />}
     </main>
   );
 }

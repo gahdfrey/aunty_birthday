@@ -10,11 +10,11 @@ const EnvelopeStage = dynamic(() => import("./EnvelopeStage"), { ssr: false });
 
 const RECIPIENT = "Aunty";
 const PARAGRAPHS = [
-  "Happy birthday! Thank you for the laughter, the love, and every moment you make brighter just by being in it.",
-  "You have a way of making everyone feel at home, and I hope this year gives back even a little of the warmth you give to all of us.",
-  "Wishing you good health, big joy, and plenty of cake.",
+  "They say there are four kinds of luck, and I want to talk about the one called dumb luck: the kind no one can earn, plan for, or influence. It simply happens by chance. That’s exactly the kind of luck that gave me you as my aunt, and I’ll never stop being grateful for it. Today, I want the whole world to know how thankful I am to have you in my life.",
+  "I thought long and hard about how to make your birthday extra special this year, and I decided to use my skills to create something lasting: a celebration of you that lives online. As long as the internet exists (and by my estimate, that’ll be a very long time), anyone who visits this page will feel just how much you’re appreciated and loved.",
+  "Happy birthday, Aunty! Wishing you a wonderful day and many more beautiful years ahead.",
 ];
-const SIGN_OFF = "With all my love";
+const SIGN_OFF = "Your nephew T";
 
 const EASE_OUT: [number, number, number, number] = [0.16, 1, 0.3, 1];
 
@@ -39,54 +39,67 @@ const closeButton: Variants = {
   shown: { opacity: 1, y: 0, transition: { duration: 0.5, delay: 1.4 } },
 };
 
-export default function EnvelopeMessage({ onClose }: { onClose: () => void }) {
+// Stays mounted (invisible and paused) once the page has settled, so opening the letter
+// reuses an already-prepared 3D scene instead of building one in the middle of the animation.
+export default function EnvelopeMessage({
+  open,
+  runId,
+  onClose,
+}: {
+  open: boolean;
+  // Goes up each time the letter is opened, which restarts the envelope sequence.
+  runId: number;
+  onClose: () => void;
+}) {
   const reduceMotion = useReducedMotion();
-  const [revealed, setRevealed] = useState(Boolean(reduceMotion));
-  const reveal = useCallback(() => setRevealed(true), []);
+  const [revealedRun, setRevealedRun] = useState(-1);
+  const revealed = Boolean(reduceMotion) || revealedRun === runId;
+  const reveal = useCallback(() => setRevealedRun(runId), [runId]);
+  const playing = open && !revealed;
 
   useEffect(() => {
+    if (!open) return;
     const closeOnEscape = (event: KeyboardEvent) => {
       if (event.key === "Escape") onClose();
     };
     window.addEventListener("keydown", closeOnEscape);
     return () => window.removeEventListener("keydown", closeOnEscape);
-  }, [onClose]);
+  }, [open, onClose]);
 
   return (
     <motion.div
       role="dialog"
       aria-modal="true"
+      aria-hidden={!open}
       aria-label={`A birthday message for ${RECIPIENT}`}
       className="fixed inset-0 z-50 overflow-hidden bg-[radial-gradient(ellipse_at_center,rgba(74,29,94,0.94)_0%,rgba(13,6,24,0.98)_75%)]"
-      initial={{ opacity: 0 }}
-      animate={{ opacity: 1, transition: { duration: 0.5 } }}
-      exit={{ opacity: 0, transition: { duration: 0.45 } }}
+      style={{ pointerEvents: open ? "auto" : "none" }}
+      initial={false}
+      animate={{ opacity: open ? 1 : 0 }}
+      transition={{ duration: open ? 0.5 : 0.45, ease: "easeOut" }}
     >
-      <AnimatePresence>
-        {!revealed && (
-          <motion.div
-            key="stage"
-            className="absolute inset-0"
-            exit={{ opacity: 0, transition: { duration: 0.7, ease: "easeInOut" } }}
+      <div
+        className="absolute inset-0 transition-opacity duration-700 ease-in-out"
+        style={{ opacity: playing ? 1 : 0 }}
+      >
+        <SceneErrorBoundary onError={reveal}>
+          <EnvelopeStage recipient={RECIPIENT} playing={playing} runId={runId} onReveal={reveal} />
+        </SceneErrorBoundary>
+        {playing && (
+          <button
+            type="button"
+            onClick={reveal}
+            className="absolute right-4 top-4 rounded-full border border-white/20 px-4 py-1.5 text-xs text-white/70 hover:bg-white/10 hover:text-white"
           >
-            <SceneErrorBoundary onError={reveal}>
-              <EnvelopeStage recipient={RECIPIENT} onReveal={reveal} />
-            </SceneErrorBoundary>
-            <button
-              type="button"
-              onClick={reveal}
-              className="absolute right-4 top-4 rounded-full border border-white/20 px-4 py-1.5 text-xs text-white/70 hover:bg-white/10 hover:text-white"
-            >
-              Skip
-            </button>
-          </motion.div>
+            Skip
+          </button>
         )}
-      </AnimatePresence>
+      </div>
 
       <AnimatePresence>
-        {revealed && (
+        {open && revealed && (
           <motion.div
-            key="letter"
+            key={`letter-${runId}`}
             className="absolute inset-0 flex flex-col items-center justify-center gap-5 px-4"
             initial="hidden"
             animate="shown"
@@ -122,7 +135,7 @@ export default function EnvelopeMessage({ onClose }: { onClose: () => void }) {
                 </motion.p>
               ))}
               <motion.p variants={line} className="mt-8 font-display text-lg italic text-[#7a3550]">
-                {SIGN_OFF} ♥
+                {SIGN_OFF}
               </motion.p>
             </motion.article>
 

@@ -2,8 +2,9 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Canvas, useFrame, useThree } from "@react-three/fiber";
-import { Sparkles } from "@react-three/drei";
+import { PerformanceMonitor, Sparkles } from "@react-three/drei";
 import * as THREE from "three";
+import { initialPixelRatio, timelineStep } from "@/lib/renderQuality";
 
 const WIDTH = 3;
 const HEIGHT = 2;
@@ -93,7 +94,7 @@ function createBurst() {
   }));
 }
 
-function Envelope({ recipient, onReveal }: { recipient: string; onReveal: () => void }) {
+function Envelope({ recipient, runId, onReveal }: { recipient: string; runId: number; onReveal: () => void }) {
   const envelope = useRef<THREE.Group>(null);
   const flapHinge = useRef<THREE.Group>(null);
   const seal = useRef<THREE.Group>(null);
@@ -121,16 +122,24 @@ function Envelope({ recipient, onReveal }: { recipient: string; onReveal: () => 
     [],
   );
 
-  // The whole sequence is driven from one clock, so nothing re-renders React mid-animation.
-  // Compile shaders before the first frame so the fly-in doesn't stutter.
+  // Compile shaders, upload the letter texture and draw one frame while the scene is still
+  // invisible, so all the GPU setup is done before the fly-in starts.
   useEffect(() => {
     gl.compile(scene, camera);
-  }, [gl, scene, camera]);
+    gl.initTexture(texture);
+    gl.render(scene, camera);
+  }, [gl, scene, camera, texture]);
 
+  // Every pose is calculated from the timeline position, so restarting is just rewinding it.
+  useEffect(() => {
+    elapsed.current = 0;
+    revealed.current = false;
+  }, [runId]);
+
+  // The whole sequence is driven from one clock, so nothing re-renders React mid-animation.
   useFrame((state, delta) => {
     if (!envelope.current || !flapHinge.current || !seal.current || !letter.current || !burst.current) return;
-    // Capped steps: a slow frame briefly slows the sequence down instead of making it jump ahead.
-    elapsed.current += Math.min(delta, 1 / 30);
+    elapsed.current += timelineStep(delta);
     const t = elapsed.current;
     const env = envelope.current;
 
@@ -213,24 +222,12 @@ function Envelope({ recipient, onReveal }: { recipient: string; onReveal: () => 
         </mesh>
         <mesh position={[0, 0, 0.045]}>
           <shapeGeometry args={[shapes.pocket]} />
-          <meshPhysicalMaterial
-            color="#f2b3c4"
-            roughness={0.6}
-            sheen={0.6}
-            sheenColor="#ffffff"
-            side={THREE.DoubleSide}
-          />
+          <meshStandardMaterial color="#f2b3c4" roughness={0.6} side={THREE.DoubleSide} />
         </mesh>
         <group ref={flapHinge} position={[0, HEIGHT / 2, 0.055]}>
           <mesh>
             <shapeGeometry args={[shapes.flap]} />
-            <meshPhysicalMaterial
-              color="#eaa0b6"
-              roughness={0.55}
-              sheen={0.6}
-              sheenColor="#ffffff"
-              side={THREE.DoubleSide}
-            />
+            <meshStandardMaterial color="#eaa0b6" roughness={0.55} side={THREE.DoubleSide} />
           </mesh>
         </group>
         <group ref={seal} position={SEAL_POSITION}>
@@ -247,7 +244,6 @@ function Envelope({ recipient, onReveal }: { recipient: string; onReveal: () => 
           <sphereGeometry args={[1, 8, 8]} />
           <meshBasicMaterial color="#ffd27a" toneMapped={false} />
         </instancedMesh>
-        <Sparkles count={30} scale={[4, 3, 1.5]} size={2.5} speed={0.4} color="#ffe2a8" />
       </group>
 
       <mesh ref={letter}>
@@ -265,19 +261,34 @@ function Envelope({ recipient, onReveal }: { recipient: string; onReveal: () => 
   );
 }
 
-export default function EnvelopeStage({ recipient, onReveal }: { recipient: string; onReveal: () => void }) {
+export default function EnvelopeStage({
+  recipient,
+  playing,
+  runId,
+  onReveal,
+}: {
+  recipient: string;
+  playing: boolean;
+  runId: number;
+  onReveal: () => void;
+}) {
+  const [dpr, setDpr] = useState(initialPixelRatio);
+
   return (
     <Canvas
-      dpr={[1, 1.5]}
+      // Only draws while the envelope is on screen; the rest of the time it costs nothing.
+      frameloop={playing ? "always" : "never"}
+      dpr={dpr}
       camera={{ position: [0, 0, 8], fov: 40 }}
       gl={{ antialias: true, alpha: true, powerPreference: "high-performance" }}
     >
+      <PerformanceMonitor onDecline={() => setDpr(1)} onIncline={() => setDpr(initialPixelRatio())} />
       <ambientLight intensity={0.75} />
       <directionalLight position={[3, 4, 6]} intensity={1.6} />
       <pointLight position={[-4, -2, 4]} intensity={18} color="#ff9ec0" />
       <pointLight position={[0, 3, -3]} intensity={12} color="#ffd59a" />
-      <Sparkles count={70} scale={[14, 9, 6]} size={2.2} speed={0.3} color="#ffd9a0" />
-      <Envelope recipient={recipient} onReveal={onReveal} />
+      <Sparkles count={60} scale={[14, 9, 6]} size={2.4} speed={0.3} color="#ffd9a0" />
+      <Envelope recipient={recipient} runId={runId} onReveal={onReveal} />
     </Canvas>
   );
 }

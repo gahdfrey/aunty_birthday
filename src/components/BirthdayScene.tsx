@@ -2,8 +2,9 @@
 
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { Canvas, useFrame, useThree } from "@react-three/fiber";
-import { ContactShadows, Float, Line, OrbitControls, PerformanceMonitor, Sparkles } from "@react-three/drei";
+import { ContactShadows, Float, OrbitControls, PerformanceMonitor, Sparkles } from "@react-three/drei";
 import * as THREE from "three";
+import { initialPixelRatio, timelineStep } from "@/lib/renderQuality";
 
 const PALETTE = ["#ff6b9d", "#ffd166", "#06d6a0", "#4cc9f0", "#b388ff", "#ff9f68"];
 
@@ -31,12 +32,11 @@ const clamp01 = (x: number) => Math.min(1, Math.max(0, x));
 const easeOutCubic = (p: number) => 1 - (1 - p) ** 3;
 const easeOutBack = (p: number) => 1 + 2.2 * (p - 1) ** 3 + 1.2 * (p - 1) ** 2;
 
-// Time since this component's first frame. Each step is capped, so a slow frame on a phone
-// (shader compile, garbage collection) slows the intro down briefly instead of making it jump ahead.
+// Time since this component's first frame (see timelineStep for how slow frames are handled).
 function useIntroTime() {
   const elapsed = useRef(0);
   useFrame((_, delta) => {
-    elapsed.current += Math.min(delta, 1 / 30);
+    elapsed.current += timelineStep(delta);
   });
   return elapsed;
 }
@@ -215,13 +215,18 @@ function Candles({ blown }: { blown: boolean }) {
 }
 
 function Balloon({ position, color }: { position: [number, number, number]; color: string }) {
-  const stringPoints = useMemo(
-    () => [
-      new THREE.Vector3(0, -0.62, 0),
-      new THREE.Vector3(0.08, -1.2, 0.04),
-      new THREE.Vector3(-0.06, -1.8, -0.02),
-      new THREE.Vector3(0.03, -2.4, 0),
-    ],
+  // A plain 1px line: much cheaper to draw than drei's thick-line shader.
+  const string = useMemo(
+    () =>
+      new THREE.Line(
+        new THREE.BufferGeometry().setFromPoints([
+          new THREE.Vector3(0, -0.62, 0),
+          new THREE.Vector3(0.08, -1.2, 0.04),
+          new THREE.Vector3(-0.06, -1.8, -0.02),
+          new THREE.Vector3(0.03, -2.4, 0),
+        ]),
+        new THREE.LineBasicMaterial({ color: "#f3e9ff", transparent: true, opacity: 0.7 }),
+      ),
     [],
   );
 
@@ -235,7 +240,7 @@ function Balloon({ position, color }: { position: [number, number, number]; colo
         <coneGeometry args={[0.07, 0.1, 12]} />
         <meshStandardMaterial color={color} />
       </mesh>
-      <Line points={stringPoints} color="#f3e9ff" lineWidth={1} transparent opacity={0.7} />
+      <primitive object={string} />
     </Float>
   );
 }
@@ -355,8 +360,8 @@ export default function BirthdayScene({
   onReady?: () => void;
 }) {
   const [shown, setShown] = useState(false);
-  // Start at up to 1.5x pixel density and drop to 1x if the device can't keep up.
-  const [dpr, setDpr] = useState(1.5);
+  // Start at a device-appropriate sharpness and drop to 1x if the device can't keep up.
+  const [dpr, setDpr] = useState(initialPixelRatio);
 
   return (
     <div
@@ -370,7 +375,7 @@ export default function BirthdayScene({
         camera={{ position: [0, 2.6, 9.5], fov: 42 }}
         gl={{ alpha: true, antialias: true, powerPreference: "high-performance" }}
       >
-        <PerformanceMonitor onDecline={() => setDpr(1)} onIncline={() => setDpr(1.5)} />
+        <PerformanceMonitor onDecline={() => setDpr(1)} onIncline={() => setDpr(initialPixelRatio())} />
         <ResponsiveCamera />
         <ambientLight intensity={0.55} />
         <directionalLight position={[4, 8, 5]} intensity={1.4} />
@@ -391,7 +396,7 @@ export default function BirthdayScene({
           </BalloonIntro>
         ))}
 
-        <Sparkles count={80} scale={[10, 6, 6]} position={[0, 2, -1]} size={3} speed={0.35} color="#ffe8a3" />
+        <Sparkles count={60} scale={[10, 6, 6]} position={[0, 2, -1]} size={3} speed={0.35} color="#ffe8a3" />
         <Confetti active={blown} />
 
         <OrbitControls
