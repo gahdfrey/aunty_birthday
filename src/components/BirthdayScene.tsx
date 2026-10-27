@@ -285,7 +285,6 @@ function Confetti({ active }: { active: boolean }) {
   useFrame(({ clock }, delta) => {
     if (!mesh.current) return;
     const t = clock.elapsedTime;
-    let anyFalling = false;
     pieces.forEach((piece, i) => {
       if (piece.falling) {
         piece.position.y -= piece.speed * delta;
@@ -299,19 +298,20 @@ function Confetti({ active }: { active: boolean }) {
           else piece.falling = false;
         }
       }
-      anyFalling ||= piece.falling;
       dummy.position.copy(piece.position);
       dummy.rotation.copy(piece.rotation);
       dummy.scale.setScalar(piece.falling ? 1 : 0);
       dummy.updateMatrix();
       mesh.current!.setMatrixAt(i, dummy.matrix);
     });
-    mesh.current.visible = anyFalling;
     mesh.current.instanceMatrix.needsUpdate = true;
   });
 
   return (
-    <instancedMesh ref={mesh} args={[undefined, undefined, CONFETTI_COUNT]} visible={false}>
+    // Always "visible", with landed pieces scaled to nothing: three.js only prepares shaders for
+    // visible objects, so a hidden mesh would compile its shader (and freeze for a moment) the
+    // first time the confetti appears.
+    <instancedMesh ref={mesh} args={[undefined, undefined, CONFETTI_COUNT]}>
       <planeGeometry args={[0.09, 0.15]} />
       <meshStandardMaterial side={THREE.DoubleSide} roughness={0.6} />
     </instancedMesh>

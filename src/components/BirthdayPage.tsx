@@ -44,21 +44,30 @@ export default function BirthdayPage() {
   };
   // Prepare the envelope's 3D scene in the background once the cake's intro has finished,
   // so "Read message" plays instantly without competing with the intro for the GPU.
+  // The audio engine is prepared a little later still, so the two never land on the same frame.
   const prepareEnvelope = useCallback(() => {
     setTimeout(() => setEnvelopeMounted(true), 2500);
+    setTimeout(() => birthdayAudio.prepare(), 4000);
   }, []);
 
   // The wish moment: music softens while the visitor wishes, then the candles go out.
   useEffect(() => {
     if (phase !== "wishing") return;
+    // The blow-out sound is scheduled now, timed on the audio clock to land as the candles go out.
     birthdayAudio.duck(true);
+    const cancelBlowOut = birthdayAudio.blowOut(WISH_SECONDS);
+    birthdayAudio.duck(false, WISH_SECONDS);
+    let finished = false;
     const timer = setTimeout(() => {
+      finished = true;
       setPhase("blown");
       setCelebrating(true);
-      birthdayAudio.blowOut();
-      birthdayAudio.duck(false);
     }, WISH_SECONDS * 1000);
-    return () => clearTimeout(timer);
+    return () => {
+      clearTimeout(timer);
+      // Only an interrupted wish cancels the sound (in development, React runs effects twice).
+      if (!finished) cancelBlowOut();
+    };
   }, [phase]);
 
   useEffect(() => {

@@ -167,18 +167,18 @@ function Envelope({ recipient, runId, onReveal }: { recipient: string; runId: nu
     seal.current.scale.setScalar(
       sealPop < 0.5 ? 1 + 0.35 * easeOutCubic(sealPop * 2) : 1.35 * (1 - easeInCubic((sealPop - 0.5) * 2)),
     );
+    // The sparks stay "visible" but scaled to nothing outside the burst, so their shader is
+    // prepared up front with everything else instead of compiling mid-animation.
     const burstProgress = segment(t, 3.1, 1.2);
-    burst.current.visible = burstProgress > 0 && burstProgress < 1;
-    if (burst.current.visible) {
-      const travel = easeOutCubic(burstProgress);
-      burstPieces.forEach((piece, i) => {
-        scratch.dummy.position.copy(piece.direction).multiplyScalar(travel);
-        scratch.dummy.scale.setScalar(piece.size * (1 - burstProgress));
-        scratch.dummy.updateMatrix();
-        burst.current!.setMatrixAt(i, scratch.dummy.matrix);
-      });
-      burst.current.instanceMatrix.needsUpdate = true;
-    }
+    const bursting = burstProgress > 0 && burstProgress < 1;
+    const travel = easeOutCubic(burstProgress);
+    burstPieces.forEach((piece, i) => {
+      scratch.dummy.position.copy(piece.direction).multiplyScalar(travel);
+      scratch.dummy.scale.setScalar(bursting ? piece.size * (1 - burstProgress) : 0);
+      scratch.dummy.updateMatrix();
+      burst.current!.setMatrixAt(i, scratch.dummy.matrix);
+    });
+    burst.current.instanceMatrix.needsUpdate = true;
 
     // 4. The flap swings open over the top and folds slightly behind.
     flapHinge.current.rotation.x = -(Math.PI + 0.1) * easeInOutCubic(segment(t, 3.3, 0.9));
@@ -240,7 +240,7 @@ function Envelope({ recipient, runId, onReveal }: { recipient: string; runId: nu
             <meshStandardMaterial color="#f5c86a" metalness={0.8} roughness={0.25} />
           </mesh>
         </group>
-        <instancedMesh ref={burst} args={[undefined, undefined, BURST_COUNT]} position={SEAL_POSITION} visible={false}>
+        <instancedMesh ref={burst} args={[undefined, undefined, BURST_COUNT]} position={SEAL_POSITION}>
           <sphereGeometry args={[1, 8, 8]} />
           <meshBasicMaterial color="#ffd27a" toneMapped={false} />
         </instancedMesh>
