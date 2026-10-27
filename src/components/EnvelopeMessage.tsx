@@ -73,9 +73,14 @@ export default function EnvelopeMessage({
       aria-hidden={!open}
       aria-label={`A birthday message for ${RECIPIENT}`}
       className="fixed inset-0 z-50 overflow-hidden bg-[radial-gradient(ellipse_at_center,rgba(74,29,94,0.94)_0%,rgba(13,6,24,0.98)_75%)]"
-      style={{ pointerEvents: open ? "auto" : "none" }}
-      initial={false}
-      animate={{ opacity: open ? 1 : 0 }}
+      // While closed, this full-screen layer must not catch any taps or drags meant for the page.
+      // `inert` disables everything inside it, including the 3D canvas, which turns pointer
+      // events back on for itself and would otherwise ignore a parent's pointer-events: none.
+      inert={!open}
+      initial={{ opacity: 0, visibility: "hidden" }}
+      animate={
+        open ? { opacity: 1, visibility: "visible" } : { opacity: 0, transitionEnd: { visibility: "hidden" } }
+      }
       transition={{ duration: open ? 0.5 : 0.45, ease: "easeOut" }}
     >
       <div
