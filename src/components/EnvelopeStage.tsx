@@ -313,18 +313,26 @@ function Envelope({ recipient, runId, onReveal }: { recipient: string; runId: nu
     });
     burst.current.instanceMatrix.needsUpdate = true;
 
-    // 4. The flap swings open over the top and folds slightly behind.
-    flapHinge.current.rotation.x = -(Math.PI + 0.1) * easeInOutCubic(segment(t, 3.3, 0.9));
+    // 4. The flap swings open over the top and folds slightly behind. Its hinge moves from the
+    // front of the envelope, where it closes over the pocket, to the back, where a real flap is
+    // attached, so the opened flap sits behind the letter as it comes out.
+    const flapOpen = easeInOutCubic(segment(t, 3.3, 0.9));
+    flapHinge.current.rotation.x = -(Math.PI + 0.1) * flapOpen;
+    flapHinge.current.position.z = lerp(0.055, -0.03, flapOpen);
 
-    // 5. The folded letter slides out, drifting toward the viewer.
-    const slide = easeOutCubic(segment(t, 4.1, 1.0));
+    // 5. The folded letter is drawn up out of the envelope. It stays between the back and the pocket
+    // the whole way, and only comes forward once it is clear of the envelope (in step 6), so it never
+    // passes through the pocket. It starts gently, like being pulled, with a little side to side wiggle.
+    const pull = segment(t, 4.0, 1.1);
+    const slide = easeInOutCubic(pull);
     env.updateMatrixWorld();
     scratch.letterPosition
-      .set(0, lerp(-0.25, 1.4, slide), lerp(0.022, 0.2, slide))
+      .set(Math.sin(pull * Math.PI * 2) * 0.04, lerp(-0.25, 1.4, slide), 0.022)
       .applyMatrix4(env.matrixWorld);
 
     // 6. The letter lifts free, twirls once and turns to face the viewer while the envelope falls away.
-    const lift = easeInOutCubic(segment(t, 5.1, 1.2));
+    const liftProgress = segment(t, 5.1, 1.2);
+    const lift = easeInOutCubic(liftProgress);
     // End at the same on-screen width as the letter card (min(92vw, 520px)) so the hand-off is seamless.
     const targetView = state.viewport.getCurrentViewport(state.camera, scratch.target);
     const cardWidth = Math.min(state.size.width * 0.92, 520) / state.size.width;
@@ -333,12 +341,15 @@ function Envelope({ recipient, runId, onReveal }: { recipient: string; runId: nu
     // It floats gently once it arrives, so it never sits completely still.
     letter.current.position.y += Math.sin(t * 1.8) * 0.04 * lift;
     letter.current.quaternion.slerpQuaternions(env.quaternion, scratch.facingCamera, lift);
-    scratch.twirl.setFromAxisAngle(scratch.upAxis, Math.PI * 2 * lift);
+    // The twirl waits until the letter has come forward, clear of the envelope, so its ends never
+    // swing back through the flap.
+    scratch.twirl.setFromAxisAngle(scratch.upAxis, Math.PI * 2 * easeInOutCubic(segment(liftProgress, 0.35, 0.65)));
     letter.current.quaternion.multiply(scratch.twirl);
-    letter.current.rotateZ(Math.sin(lift * Math.PI) * 0.25);
+    letter.current.rotateZ(Math.sin(lift * Math.PI) * 0.25 + Math.sin(pull * Math.PI * 2) * 0.03);
     letter.current.scale.setScalar(lerp(fit, targetScale, lift));
     env.position.y -= 6 * easeInCubic(lift);
-    env.rotation.x += 0.9 * lift;
+    // It tips backward as it drops, so its top edge swings away from the letter, never into it.
+    env.rotation.x -= 0.9 * lift;
 
     // 7. The letter unfolds: the outer third flips up, then the bottom third swings down.
     const openTop = segment(t, 6.3, 0.8);
