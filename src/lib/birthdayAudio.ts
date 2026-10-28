@@ -1,57 +1,11 @@
-// All sound on the page, synthesized live with the Web Audio API: a music-box "Happy Birthday"
-// loop plus a few effects. Nothing to download, and it runs on the audio thread, off the main
-// thread that drives the animations.
+// All sound on the page, synthesized live with the Web Audio API: a music-box tune (see tunes.ts)
+// plus a few effects. Nothing to download, and it runs on the audio thread, off the main thread
+// that drives the animations.
 
-// prettier-ignore
-const NOTE_OFFSETS: Record<string, number> = {
-  C: 0, "C#": 1, D: 2, "D#": 3, E: 4, F: 5, "F#": 6, G: 7, "G#": 8, A: 9, "A#": 10, B: 11,
-};
+import { DEFAULT_TUNE_ID, TUNES, frequency, musicEvents, type MusicEvent, type Tune } from "./tunes";
 
-function frequency(note: string) {
-  const match = /^([A-G]#?)(\d)$/.exec(note)!;
-  const midi = NOTE_OFFSETS[match[1]] + (Number(match[2]) + 1) * 12;
-  return 440 * 2 ** ((midi - 69) / 12);
-}
-
-// The traditional "Happy Birthday" melody in G major, as [note, beats]. It starts on a one-beat pickup.
-// prettier-ignore
-const MELODY: [string, number][] = [
-  ["D4", 0.75], ["D4", 0.25], ["E4", 1], ["D4", 1], ["G4", 1], ["F#4", 2],
-  ["D4", 0.75], ["D4", 0.25], ["E4", 1], ["D4", 1], ["A4", 1], ["G4", 2],
-  ["D4", 0.75], ["D4", 0.25], ["D5", 1], ["B4", 1], ["G4", 1], ["F#4", 1], ["E4", 1],
-  ["C5", 0.75], ["C5", 0.25], ["B4", 1], ["G4", 1], ["A4", 1], ["G4", 3],
-];
-
-// One chord per 3/4 bar, starting after the pickup beat: [bass, chord tones].
-const CHORDS: [string, string[]][] = [
-  ["G2", ["G3", "B3", "D4"]],
-  ["D3", ["F#3", "A3", "D4"]],
-  ["D3", ["F#3", "A3", "C4"]],
-  ["G2", ["G3", "B3", "D4"]],
-  ["G2", ["G3", "B3", "D4"]],
-  ["C3", ["G3", "C4", "E4"]],
-  ["D3", ["G3", "B3", "D4"]],
-  ["G2", ["G3", "B3", "D4"]],
-];
-
-const BEAT = 60 / 88;
-// 25 beats of melody plus a two-beat breath before it comes round again.
-const LOOP_BEATS = 27;
 const MUSIC_VOLUME = 0.32;
 const MUTED_KEY = "birthday-music-muted";
-
-// The melody and chords merged into one timeline, in beats from the start of a pass.
-type MusicEvent = { beat: number; melody?: string; chord?: [string, string[]] };
-const MUSIC_EVENTS: MusicEvent[] = (() => {
-  const events: MusicEvent[] = [];
-  let beat = 0;
-  MELODY.forEach(([note, beats]) => {
-    events.push({ beat, melody: note });
-    beat += beats;
-  });
-  CHORDS.forEach((chord, bar) => events.push({ beat: 1 + bar * 3, chord }));
-  return events.sort((a, b) => a.beat - b.beat);
-})();
 
 export type AudioState = { started: boolean; muted: boolean };
 
@@ -121,6 +75,9 @@ class BirthdayAudio {
   private loopStart = 0;
   private loopCount = 0;
   private nextEvent = 0;
+  private tune: Tune = TUNES.find((tune) => tune.id === DEFAULT_TUNE_ID)!;
+  private events: MusicEvent[] = musicEvents(this.tune);
+  private musicOn = true;
   private listeners = new Set<() => void>();
   private state: AudioState = { started: false, muted: false };
 
@@ -170,10 +127,7 @@ class BirthdayAudio {
     wet.gain.value = 0.35;
     this.reverb.connect(wet).connect(this.master);
 
-    this.music = ctx.createGain();
-    this.music.gain.value = MUSIC_VOLUME;
-    this.music.connect(this.master);
-    this.music.connect(this.reverb);
+    this.music = this.createMusicBus();
 
     this.noise = this.createNoise();
     this.brownNoise = this.createBrownNoise();
@@ -222,10 +176,7 @@ class BirthdayAudio {
       this.start();
       return;
     }
-    const muted = !this.state.muted;
-    this.master.gain.setTargetAtTime(muted ? 0 : 1, ctx.currentTime, muted ? 0.08 : 0.3);
-    this.writeMutedPreference(muted);
-    this.setState({ muted });
+    this.setMuted(!this.state.muted);
   }
 
   // Lowers the music while a wish is being made, then brings it back, optionally after `delay` seconds.
@@ -335,30 +286,82 @@ class BirthdayAudio {
     });
   }
 
+  // Switches to another tune straight away, starting it from the top. Used by the tune preview page.
+  playTune(id: string) {
+    const tune = TUNES.find((candidate) => candidate.id === id);
+    const ctx = this.ctx;
+    if (!tune || !ctx) return;
+    this.replaceMusicBus();
+    this.tune = tune;
+    this.events = musicEvents(tune);
+    this.nextEvent = 0;
+    this.loopCount = 0;
+    this.loopStart = ctx.currentTime + 0.15;
+    this.musicOn = true;
+  }
+
+  stopMusic() {
+    if (!this.ctx) return;
+    this.replaceMusicBus();
+    this.musicOn = false;
+  }
+
+  // Unmutes or mutes without the button; `remember` controls whether it's saved for the next visit.
+  setMuted(muted: boolean, remember = true) {
+    const ctx = this.ctx;
+    if (!ctx || muted === this.state.muted) return;
+    this.master.gain.setTargetAtTime(muted ? 0 : 1, ctx.currentTime, muted ? 0.08 : 0.3);
+    if (remember) this.writeMutedPreference(muted);
+    this.setState({ muted });
+  }
+
+  private createMusicBus() {
+    const bus = this.ctx!.createGain();
+    bus.gain.value = MUSIC_VOLUME;
+    bus.connect(this.master);
+    bus.connect(this.reverb);
+    return bus;
+  }
+
+  // Fades out notes already queued on the current bus (rather than cutting them off mid-note)
+  // and sends everything from now on to a fresh one.
+  private replaceMusicBus() {
+    const ctx = this.ctx!;
+    const old = this.music;
+    old.gain.cancelScheduledValues(ctx.currentTime);
+    old.gain.setTargetAtTime(0, ctx.currentTime, 0.08);
+    window.setTimeout(() => old.disconnect(), 1500);
+    this.music = this.createMusicBus();
+  }
+
   // A look-ahead scheduler: every 150 ms it queues just the notes due in the next half second,
   // so it only ever builds a few audio nodes at a time instead of a whole pass of the tune at once.
   private scheduleMusic() {
     const ctx = this.ctx;
-    if (!ctx) return;
+    if (!ctx || !this.musicOn) return;
+    const { tune, events } = this;
+    const beat = 60 / tune.bpm;
     for (;;) {
-      const event = MUSIC_EVENTS[this.nextEvent];
-      const at = this.loopStart + event.beat * BEAT;
+      const event = events[this.nextEvent];
+      const at = this.loopStart + event.beat * beat;
       if (at > ctx.currentTime + 0.5) break;
       // Muted: keep time without building any sound.
       if (!this.state.muted && at > ctx.currentTime - 0.05) {
-        // Every other pass is an octave higher, like a second music box joining in.
-        if (event.melody)
-          this.musicBoxNote(at, frequency(event.melody) * (this.loopCount % 2 === 1 ? 2 : 1), 0.22);
+        if (event.melody) {
+          const octave = tune.octave * (tune.alternateOctave && this.loopCount % 2 === 1 ? 2 : 1);
+          this.musicBoxNote(at, frequency(event.melody) * octave, 0.22);
+        }
         if (event.chord) {
           const [bass, tones] = event.chord;
-          this.pad(at, frequency(bass), 3 * BEAT, 0.12);
-          tones.forEach((tone) => this.pad(at, frequency(tone), 3 * BEAT, 0.035));
+          const length = tune.beatsPerBar * beat;
+          this.pad(at, frequency(bass), length, 0.12);
+          tones.forEach((tone) => this.pad(at, frequency(tone), length, 0.035));
         }
       }
       this.nextEvent += 1;
-      if (this.nextEvent === MUSIC_EVENTS.length) {
+      if (this.nextEvent === events.length) {
         this.nextEvent = 0;
-        this.loopStart += LOOP_BEATS * BEAT;
+        this.loopStart += tune.loopBeats * beat;
         this.loopCount += 1;
       }
     }
