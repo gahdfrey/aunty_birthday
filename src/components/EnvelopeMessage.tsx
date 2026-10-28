@@ -9,6 +9,8 @@ import SceneErrorBoundary from "./SceneErrorBoundary";
 const EnvelopeStage = dynamic(() => import("./EnvelopeStage"), { ssr: false });
 
 const RECIPIENT = "Aunty";
+// Written on the outside of the folded letter as it comes out of the envelope.
+const ADDRESSEE = "Aunty Rita";
 const PARAGRAPHS = [
   "They say there are four kinds of luck, and I want to talk about the one called dumb luck: the kind no one can earn, plan for, or influence. It simply happens by chance. That’s exactly the kind of luck that gave me you as my aunt, and I’ll never stop being grateful for it. Today, I want the whole world to know how thankful I am to have you in my life.",
   "I thought long and hard about how to make your birthday extra special this year, and I decided to use my skills to create something lasting: a celebration of you that lives online. As long as the internet exists (and by my estimate, that’ll be a very long time), anyone who visits this page will feel just how much you’re appreciated and loved.",
@@ -148,7 +150,14 @@ export default function EnvelopeMessage({
         style={{ opacity: playing ? 1 : 0 }}
       >
         <SceneErrorBoundary onError={reveal}>
-          <EnvelopeStage recipient={RECIPIENT} playing={playing} idle={!open} runId={runId} onReveal={reveal} />
+          <EnvelopeStage
+            recipient={RECIPIENT}
+            addressee={ADDRESSEE}
+            playing={playing}
+            idle={!open}
+            runId={runId}
+            onReveal={reveal}
+          />
         </SceneErrorBoundary>
         {playing && (
           <button

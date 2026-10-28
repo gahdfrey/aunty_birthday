@@ -89,7 +89,7 @@ function createLetterTexture(recipient: string) {
 }
 
 // The outside of the folded letter, seen as it comes out of the envelope.
-function createCoverTexture(recipient: string) {
+function createCoverTexture(addressee: string) {
   const canvas = document.createElement("canvas");
   canvas.width = 1024;
   canvas.height = Math.round((1024 * PANEL_HEIGHT) / LETTER_WIDTH);
@@ -102,11 +102,14 @@ function createCoverTexture(recipient: string) {
   ctx.textBaseline = "middle";
   ctx.fillStyle = "#7a3550";
   ctx.font = `italic 74px ${serif}`;
-  ctx.fillText(`For ${recipient}`, canvas.width / 2, canvas.height / 2);
+  const label = `For ${addressee}`;
+  ctx.fillText(label, canvas.width / 2, canvas.height / 2);
+  // The hearts sit just outside the words, however long the name is.
+  const heartOffset = ctx.measureText(label).width / 2 + 60;
   ctx.fillStyle = "#e06b8f";
   ctx.font = `44px ${serif}`;
-  ctx.fillText("♥", canvas.width / 2 - 250, canvas.height / 2);
-  ctx.fillText("♥", canvas.width / 2 + 250, canvas.height / 2);
+  ctx.fillText("♥", canvas.width / 2 - heartOffset, canvas.height / 2);
+  ctx.fillText("♥", canvas.width / 2 + heartOffset, canvas.height / 2);
 
   return toTexture(canvas);
 }
@@ -167,7 +170,17 @@ function createGlitter() {
   });
 }
 
-function Envelope({ recipient, runId, onReveal }: { recipient: string; runId: number; onReveal: () => void }) {
+function Envelope({
+  recipient,
+  addressee,
+  runId,
+  onReveal,
+}: {
+  recipient: string;
+  addressee: string;
+  runId: number;
+  onReveal: () => void;
+}) {
   const envelope = useRef<THREE.Group>(null);
   const flapHinge = useRef<THREE.Group>(null);
   const seal = useRef<THREE.Group>(null);
@@ -183,7 +196,7 @@ function Envelope({ recipient, runId, onReveal }: { recipient: string; runId: nu
   const { gl, scene, camera } = useThree();
 
   const [texture] = useState(() => createLetterTexture(recipient));
-  const [coverTexture] = useState(() => createCoverTexture(recipient));
+  const [coverTexture] = useState(() => createCoverTexture(addressee));
   const [glowTexture] = useState(createGlowTexture);
   const [burstPieces] = useState(createBurst);
   const [glitterPieces] = useState(createGlitter);
@@ -491,12 +504,15 @@ function LetterPanel({
 
 export default function EnvelopeStage({
   recipient,
+  addressee,
   playing,
   idle,
   runId,
   onReveal,
 }: {
   recipient: string;
+  // Written on the outside of the folded letter.
+  addressee: string;
   playing: boolean;
   // True while the letter is closed and nothing of this scene is on screen.
   idle: boolean;
@@ -522,7 +538,7 @@ export default function EnvelopeStage({
       <pointLight position={[-4, -2, 4]} intensity={18} color="#ff9ec0" />
       <pointLight position={[0, 3, -3]} intensity={12} color="#ffd59a" />
       <Sparkles count={60} scale={[14, 9, 6]} size={2.4} speed={0.3} color="#ffd9a0" />
-      <Envelope recipient={recipient} runId={runId} onReveal={onReveal} />
+      <Envelope recipient={recipient} addressee={addressee} runId={runId} onReveal={onReveal} />
     </Canvas>
   );
 }
