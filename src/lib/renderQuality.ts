@@ -12,3 +12,27 @@ export function initialPixelRatio() {
 export function timelineStep(delta: number) {
   return Math.min(delta, 0.1);
 }
+
+// Set once either 3D scene finds the device can't keep up. The cake scene runs first, so the
+// letter's scene can switch to the lower sharpness while it is still closed, instead of resizing
+// partway through its animation, which reallocates the canvas and stalls on the phones least able
+// to afford it.
+let slowDevice = false;
+const listeners = new Set<() => void>();
+
+export function reportSlowDevice() {
+  if (slowDevice) return;
+  slowDevice = true;
+  listeners.forEach((listener) => listener());
+}
+
+export function subscribeToSceneQuality(listener: () => void) {
+  listeners.add(listener);
+  return () => {
+    listeners.delete(listener);
+  };
+}
+
+export function scenePixelRatio() {
+  return slowDevice ? 1 : initialPixelRatio();
+}

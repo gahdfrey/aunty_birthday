@@ -1,10 +1,10 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { Canvas, useFrame, useThree } from "@react-three/fiber";
 import { PerformanceMonitor, Sparkles } from "@react-three/drei";
 import * as THREE from "three";
-import { initialPixelRatio, timelineStep } from "@/lib/renderQuality";
+import { reportSlowDevice, scenePixelRatio, subscribeToSceneQuality, timelineStep } from "@/lib/renderQuality";
 
 const WIDTH = 3;
 const HEIGHT = 2;
@@ -176,7 +176,6 @@ function Envelope({ recipient, runId, onReveal }: { recipient: string; runId: nu
   const bottomFold = useRef<THREE.Group>(null);
   const glow = useRef<THREE.Mesh>(null);
   const glowMaterial = useRef<THREE.MeshBasicMaterial>(null);
-  const letterLight = useRef<THREE.PointLight>(null);
   const glitter = useRef<THREE.InstancedMesh>(null);
   const burst = useRef<THREE.InstancedMesh>(null);
   const elapsed = useRef(0);
@@ -191,6 +190,34 @@ function Envelope({ recipient, runId, onReveal }: { recipient: string; runId: nu
   const shapes = useMemo(
     () => ({ pocket: createPocketShape(), flap: createFlapShape(), heart: createHeartShape() }),
     [],
+  );
+  // The three panels share their materials, so the letter costs one shader and few state changes.
+  const paper = useMemo(
+    () => ({
+      // The emissive map keeps the paper bright and readable whatever the lighting.
+      front: new THREE.MeshStandardMaterial({
+        map: texture,
+        emissive: "#ffffff",
+        emissiveMap: texture,
+        emissiveIntensity: 0.45,
+        roughness: 0.9,
+      }),
+      back: new THREE.MeshStandardMaterial({
+        color: "#f6ecdf",
+        emissive: "#ffffff",
+        emissiveIntensity: 0.15,
+        roughness: 0.95,
+      }),
+      cover: new THREE.MeshStandardMaterial({
+        color: "#f6ecdf",
+        map: coverTexture,
+        emissive: "#ffffff",
+        emissiveMap: coverTexture,
+        emissiveIntensity: 0.4,
+        roughness: 0.95,
+      }),
+    }),
+    [texture, coverTexture],
   );
   const panels = useMemo(
     () => ({
@@ -240,7 +267,6 @@ function Envelope({ recipient, runId, onReveal }: { recipient: string; runId: nu
       !bottomFold.current ||
       !glow.current ||
       !glowMaterial.current ||
-      !letterLight.current ||
       !glitter.current ||
       !burst.current
     )
@@ -327,8 +353,8 @@ function Envelope({ recipient, runId, onReveal }: { recipient: string; runId: nu
     glow.current.position.set(scratch.target.x, scratch.target.y, scratch.target.z - 0.6);
     glow.current.scale.setScalar(targetScale * LETTER_WIDTH * 2.4 * easeOutCubic(bloom));
     glowMaterial.current.opacity = Math.sin(Math.min(bloom * 1.6, 1) * Math.PI * 0.5) * (1 - 0.35 * bloom);
-    letterLight.current.position.set(scratch.target.x, scratch.target.y, scratch.target.z + 1.4);
-    letterLight.current.intensity = 6 * Math.sin(bloom * Math.PI);
+    // The paper's own glow brightens rather than adding a light, which would cost every pixel.
+    paper.front.setValues({ emissiveIntensity: 0.45 + 0.3 * Math.sin(bloom * Math.PI) });
 
     glitter.current.position.copy(scratch.target);
     glitterPieces.forEach((piece, i) => {
@@ -392,15 +418,15 @@ function Envelope({ recipient, runId, onReveal }: { recipient: string; runId: nu
       {/* The folded letter. Each third has its printed front and a plain paper back; the two
           outer thirds hinge off the middle one and start folded over it, text side in. */}
       <group ref={letter} position={[0, 0, -40]}>
-        <LetterPanel geometry={panels.middle} back={panels.plain} texture={texture} />
+        <LetterPanel geometry={panels.middle} back={panels.plain} front={paper.front} backMaterial={paper.back} />
         <group ref={topFold} position={[0, PANEL_HEIGHT / 2, 0.01]} rotation={[Math.PI, 0, 0]}>
           <group position={[0, PANEL_HEIGHT / 2, 0]}>
-            <LetterPanel geometry={panels.top} back={panels.plain} texture={texture} backTexture={coverTexture} />
+            <LetterPanel geometry={panels.top} back={panels.plain} front={paper.front} backMaterial={paper.cover} />
           </group>
         </group>
         <group ref={bottomFold} position={[0, -PANEL_HEIGHT / 2, 0.005]} rotation={[-Math.PI, 0, 0]}>
           <group position={[0, -PANEL_HEIGHT / 2, 0]}>
-            <LetterPanel geometry={panels.bottom} back={panels.plain} texture={texture} />
+            <LetterPanel geometry={panels.bottom} back={panels.plain} front={paper.front} backMaterial={paper.back} />
           </group>
         </group>
       </group>
@@ -418,7 +444,6 @@ function Envelope({ recipient, runId, onReveal }: { recipient: string; runId: nu
           toneMapped={false}
         />
       </mesh>
-      <pointLight ref={letterLight} intensity={0} distance={6} color="#ffd9b0" />
       <instancedMesh ref={glitter} args={[undefined, undefined, GLITTER_COUNT]}>
         <octahedronGeometry args={[1, 0]} />
         <meshStandardMaterial
@@ -436,37 +461,19 @@ function Envelope({ recipient, runId, onReveal }: { recipient: string; runId: nu
 function LetterPanel({
   geometry,
   back,
-  texture,
-  backTexture,
+  front,
+  backMaterial,
 }: {
   geometry: THREE.BufferGeometry;
   back: THREE.BufferGeometry;
-  texture: THREE.Texture;
-  backTexture?: THREE.Texture;
+  front: THREE.Material;
+  backMaterial: THREE.Material;
 }) {
   return (
     <>
-      <mesh geometry={geometry}>
-        {/* The emissive map keeps the paper bright and readable whatever the lighting. */}
-        <meshStandardMaterial
-          map={texture}
-          emissive="#ffffff"
-          emissiveMap={texture}
-          emissiveIntensity={0.45}
-          roughness={0.9}
-        />
-      </mesh>
+      <mesh geometry={geometry} material={front} />
       {/* Turned to face the other way, so the back reads the right way up once folded over. */}
-      <mesh geometry={back} rotation={[Math.PI, 0, 0]}>
-        <meshStandardMaterial
-          color="#f6ecdf"
-          map={backTexture ?? null}
-          emissive="#ffffff"
-          emissiveMap={backTexture ?? null}
-          emissiveIntensity={backTexture ? 0.4 : 0.15}
-          roughness={0.95}
-        />
-      </mesh>
+      <mesh geometry={back} material={backMaterial} rotation={[Math.PI, 0, 0]} />
     </>
   );
 }
@@ -474,15 +481,21 @@ function LetterPanel({
 export default function EnvelopeStage({
   recipient,
   playing,
+  idle,
   runId,
   onReveal,
 }: {
   recipient: string;
   playing: boolean;
+  // True while the letter is closed and nothing of this scene is on screen.
+  idle: boolean;
   runId: number;
   onReveal: () => void;
 }) {
-  const [dpr, setDpr] = useState(initialPixelRatio);
+  // Sharpness only changes while the letter is closed, never partway through an opening.
+  const sharpness = useSyncExternalStore(subscribeToSceneQuality, scenePixelRatio, () => 1);
+  const [dpr, setDpr] = useState(sharpness);
+  if (idle && dpr !== sharpness) setDpr(sharpness);
 
   return (
     <Canvas
@@ -492,7 +505,7 @@ export default function EnvelopeStage({
       camera={{ position: [0, 0, 8], fov: 40 }}
       gl={{ antialias: true, alpha: true, powerPreference: "high-performance" }}
     >
-      <PerformanceMonitor onDecline={() => setDpr(1)} onIncline={() => setDpr(initialPixelRatio())} />
+      <PerformanceMonitor onDecline={reportSlowDevice} />
       <ambientLight intensity={0.75} />
       <directionalLight position={[3, 4, 6]} intensity={1.6} />
       <pointLight position={[-4, -2, 4]} intensity={18} color="#ff9ec0" />

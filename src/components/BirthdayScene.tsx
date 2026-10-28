@@ -4,7 +4,7 @@ import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { Canvas, useFrame, useThree } from "@react-three/fiber";
 import { ContactShadows, Float, OrbitControls, PerformanceMonitor, Sparkles } from "@react-three/drei";
 import * as THREE from "three";
-import { initialPixelRatio, timelineStep } from "@/lib/renderQuality";
+import { initialPixelRatio, reportSlowDevice, timelineStep } from "@/lib/renderQuality";
 
 const PALETTE = ["#ff6b9d", "#ffd166", "#06d6a0", "#4cc9f0", "#b388ff", "#ff9f68"];
 
@@ -375,7 +375,13 @@ export default function BirthdayScene({
         camera={{ position: [0, 2.6, 9.5], fov: 42 }}
         gl={{ alpha: true, antialias: true, powerPreference: "high-performance" }}
       >
-        <PerformanceMonitor onDecline={() => setDpr(1)} onIncline={() => setDpr(initialPixelRatio())} />
+        <PerformanceMonitor
+          onDecline={() => {
+            reportSlowDevice();
+            setDpr(1);
+          }}
+          onIncline={() => setDpr(initialPixelRatio())}
+        />
         <ResponsiveCamera />
         <ambientLight intensity={0.55} />
         <directionalLight position={[4, 8, 5]} intensity={1.4} />
