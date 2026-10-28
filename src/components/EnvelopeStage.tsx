@@ -10,9 +10,11 @@ const WIDTH = 3;
 const HEIGHT = 2;
 const LETTER_WIDTH = 2.7;
 const LETTER_HEIGHT = 1.75;
+// The letter is folded in thirds, like a real one, and unfolds once it reaches the viewer.
+const PANEL_HEIGHT = LETTER_HEIGHT / 3;
 const SEAL_POSITION: [number, number, number] = [0, -0.08, 0.09];
-// When the 3D letter has settled in front of the camera and the readable card takes over.
-const REVEAL_AT = 6.4;
+// When the 3D letter has unfolded in front of the camera and the readable card takes over.
+const REVEAL_AT = 7.9;
 
 const clamp01 = (x: number) => Math.min(1, Math.max(0, x));
 // Progress (0 to 1) through a segment of the timeline that starts at `start` and lasts `duration`.
@@ -20,6 +22,8 @@ const segment = (t: number, start: number, duration: number) => clamp01((t - sta
 const easeOutCubic = (p: number) => 1 - (1 - p) ** 3;
 const easeInCubic = (p: number) => p ** 3;
 const easeInOutCubic = (p: number) => (p < 0.5 ? 4 * p ** 3 : 1 - (-2 * p + 2) ** 3 / 2);
+// Overshoots a little before settling, like paper springing open.
+const easeOutBack = (p: number) => 1 + 2.2 * (p - 1) ** 3 + 1.2 * (p - 1) ** 2;
 const lerp = THREE.MathUtils.lerp;
 
 function createPocketShape() {
@@ -77,10 +81,63 @@ function createLetterTexture(recipient: string) {
   ctx.font = `64px ${serif}`;
   ctx.fillText("♥", canvas.width - 150, canvas.height - 70);
 
+  // Faint creases where the letter was folded.
+  ctx.fillStyle = "rgba(160, 120, 100, 0.12)";
+  [1, 2].forEach((fold) => ctx.fillRect(0, (canvas.height * fold) / 3 - 1, canvas.width, 3));
+
+  return toTexture(canvas);
+}
+
+// The outside of the folded letter, seen as it comes out of the envelope.
+function createCoverTexture(recipient: string) {
+  const canvas = document.createElement("canvas");
+  canvas.width = 1024;
+  canvas.height = Math.round((1024 * PANEL_HEIGHT) / LETTER_WIDTH);
+  const ctx = canvas.getContext("2d")!;
+  const serif = getComputedStyle(document.documentElement).getPropertyValue("--font-playfair") || "serif";
+
+  ctx.fillStyle = "#f8efe4";
+  ctx.fillRect(0, 0, canvas.width, canvas.height);
+  ctx.textAlign = "center";
+  ctx.textBaseline = "middle";
+  ctx.fillStyle = "#7a3550";
+  ctx.font = `italic 74px ${serif}`;
+  ctx.fillText(`For ${recipient}`, canvas.width / 2, canvas.height / 2);
+  ctx.fillStyle = "#e06b8f";
+  ctx.font = `44px ${serif}`;
+  ctx.fillText("♥", canvas.width / 2 - 250, canvas.height / 2);
+  ctx.fillText("♥", canvas.width / 2 + 250, canvas.height / 2);
+
+  return toTexture(canvas);
+}
+
+// A soft warm light that blooms behind the letter as it opens.
+function createGlowTexture() {
+  const canvas = document.createElement("canvas");
+  canvas.width = canvas.height = 256;
+  const ctx = canvas.getContext("2d")!;
+  const gradient = ctx.createRadialGradient(128, 128, 0, 128, 128, 128);
+  gradient.addColorStop(0, "rgba(255, 236, 200, 1)");
+  gradient.addColorStop(0.35, "rgba(255, 190, 150, 0.45)");
+  gradient.addColorStop(1, "rgba(255, 150, 190, 0)");
+  ctx.fillStyle = gradient;
+  ctx.fillRect(0, 0, 256, 256);
+  return toTexture(canvas);
+}
+
+function toTexture(canvas: HTMLCanvasElement) {
   const texture = new THREE.CanvasTexture(canvas);
   texture.colorSpace = THREE.SRGBColorSpace;
   texture.anisotropy = 8;
   return texture;
+}
+
+// One third of the letter, showing its own third of the letter texture (0 is the bottom).
+function createPanelGeometry(third: number) {
+  const geometry = new THREE.PlaneGeometry(LETTER_WIDTH, PANEL_HEIGHT);
+  const uv = geometry.attributes.uv;
+  for (let i = 0; i < uv.count; i++) uv.setY(i, (uv.getY(i) + third) / 3);
+  return geometry;
 }
 
 const BURST_COUNT = 60;
@@ -94,20 +151,54 @@ function createBurst() {
   }));
 }
 
+const GLITTER_COUNT = 90;
+
+// Gold flecks that spray out around the letter as it unfolds.
+function createGlitter() {
+  return Array.from({ length: GLITTER_COUNT }, () => {
+    const angle = Math.random() * Math.PI * 2;
+    const reach = 1.3 + Math.random() * 1.6;
+    return {
+      direction: new THREE.Vector3(Math.cos(angle) * reach, Math.sin(angle) * reach * 0.75, Math.random() * 1.2 - 0.4),
+      spin: new THREE.Euler(Math.random() * 6, Math.random() * 6, Math.random() * 6),
+      size: 0.025 + Math.random() * 0.035,
+      delay: Math.random() * 0.25,
+    };
+  });
+}
+
 function Envelope({ recipient, runId, onReveal }: { recipient: string; runId: number; onReveal: () => void }) {
   const envelope = useRef<THREE.Group>(null);
   const flapHinge = useRef<THREE.Group>(null);
   const seal = useRef<THREE.Group>(null);
-  const letter = useRef<THREE.Mesh>(null);
+  const letter = useRef<THREE.Group>(null);
+  const topFold = useRef<THREE.Group>(null);
+  const bottomFold = useRef<THREE.Group>(null);
+  const glow = useRef<THREE.Mesh>(null);
+  const glowMaterial = useRef<THREE.MeshBasicMaterial>(null);
+  const letterLight = useRef<THREE.PointLight>(null);
+  const glitter = useRef<THREE.InstancedMesh>(null);
   const burst = useRef<THREE.InstancedMesh>(null);
   const elapsed = useRef(0);
   const revealed = useRef(false);
   const { gl, scene, camera } = useThree();
 
   const [texture] = useState(() => createLetterTexture(recipient));
+  const [coverTexture] = useState(() => createCoverTexture(recipient));
+  const [glowTexture] = useState(createGlowTexture);
   const [burstPieces] = useState(createBurst);
+  const [glitterPieces] = useState(createGlitter);
   const shapes = useMemo(
     () => ({ pocket: createPocketShape(), flap: createFlapShape(), heart: createHeartShape() }),
+    [],
+  );
+  const panels = useMemo(
+    () => ({
+      top: createPanelGeometry(2),
+      middle: createPanelGeometry(1),
+      bottom: createPanelGeometry(0),
+      plain: new THREE.PlaneGeometry(LETTER_WIDTH, PANEL_HEIGHT),
+    }),
     [],
   );
   // Reused every frame so the animation loop allocates nothing.
@@ -118,6 +209,8 @@ function Envelope({ recipient, runId, onReveal }: { recipient: string; runId: nu
       target: new THREE.Vector3(0, 0, 3.2),
       origin: new THREE.Vector3(),
       facingCamera: new THREE.Quaternion(),
+      twirl: new THREE.Quaternion(),
+      upAxis: new THREE.Vector3(0, 1, 0),
     }),
     [],
   );
@@ -126,9 +219,9 @@ function Envelope({ recipient, runId, onReveal }: { recipient: string; runId: nu
   // invisible, so all the GPU setup is done before the fly-in starts.
   useEffect(() => {
     gl.compile(scene, camera);
-    gl.initTexture(texture);
+    [texture, coverTexture, glowTexture].forEach((map) => gl.initTexture(map));
     gl.render(scene, camera);
-  }, [gl, scene, camera, texture]);
+  }, [gl, scene, camera, texture, coverTexture, glowTexture]);
 
   // Every pose is calculated from the timeline position, so restarting is just rewinding it.
   useEffect(() => {
@@ -138,7 +231,20 @@ function Envelope({ recipient, runId, onReveal }: { recipient: string; runId: nu
 
   // The whole sequence is driven from one clock, so nothing re-renders React mid-animation.
   useFrame((state, delta) => {
-    if (!envelope.current || !flapHinge.current || !seal.current || !letter.current || !burst.current) return;
+    if (
+      !envelope.current ||
+      !flapHinge.current ||
+      !seal.current ||
+      !letter.current ||
+      !topFold.current ||
+      !bottomFold.current ||
+      !glow.current ||
+      !glowMaterial.current ||
+      !letterLight.current ||
+      !glitter.current ||
+      !burst.current
+    )
+      return;
     elapsed.current += timelineStep(delta);
     const t = elapsed.current;
     const env = envelope.current;
@@ -174,6 +280,7 @@ function Envelope({ recipient, runId, onReveal }: { recipient: string; runId: nu
     const travel = easeOutCubic(burstProgress);
     burstPieces.forEach((piece, i) => {
       scratch.dummy.position.copy(piece.direction).multiplyScalar(travel);
+      scratch.dummy.rotation.set(0, 0, 0);
       scratch.dummy.scale.setScalar(bursting ? piece.size * (1 - burstProgress) : 0);
       scratch.dummy.updateMatrix();
       burst.current!.setMatrixAt(i, scratch.dummy.matrix);
@@ -183,24 +290,60 @@ function Envelope({ recipient, runId, onReveal }: { recipient: string; runId: nu
     // 4. The flap swings open over the top and folds slightly behind.
     flapHinge.current.rotation.x = -(Math.PI + 0.1) * easeInOutCubic(segment(t, 3.3, 0.9));
 
-    // 5. The letter slides out, drifting toward the viewer.
+    // 5. The folded letter slides out, drifting toward the viewer.
     const slide = easeOutCubic(segment(t, 4.1, 1.0));
     env.updateMatrixWorld();
     scratch.letterPosition
-      .set(0, lerp(-0.05, 1.6, slide), lerp(0.03, 0.16, slide))
+      .set(0, lerp(-0.25, 1.4, slide), lerp(0.022, 0.2, slide))
       .applyMatrix4(env.matrixWorld);
 
-    // 6. The letter lifts free and turns to face the viewer while the envelope falls away.
-    const lift = easeInOutCubic(segment(t, 5.2, 1.1));
+    // 6. The letter lifts free, twirls once and turns to face the viewer while the envelope falls away.
+    const lift = easeInOutCubic(segment(t, 5.1, 1.2));
     // End at the same on-screen width as the letter card (min(92vw, 520px)) so the hand-off is seamless.
     const targetView = state.viewport.getCurrentViewport(state.camera, scratch.target);
     const cardWidth = Math.min(state.size.width * 0.92, 520) / state.size.width;
     const targetScale = (cardWidth * targetView.width) / LETTER_WIDTH;
     letter.current.position.lerpVectors(scratch.letterPosition, scratch.target, lift);
+    // It floats gently once it arrives, so it never sits completely still.
+    letter.current.position.y += Math.sin(t * 1.8) * 0.04 * lift;
     letter.current.quaternion.slerpQuaternions(env.quaternion, scratch.facingCamera, lift);
+    scratch.twirl.setFromAxisAngle(scratch.upAxis, Math.PI * 2 * lift);
+    letter.current.quaternion.multiply(scratch.twirl);
+    letter.current.rotateZ(Math.sin(lift * Math.PI) * 0.25);
     letter.current.scale.setScalar(lerp(fit, targetScale, lift));
     env.position.y -= 6 * easeInCubic(lift);
     env.rotation.x += 0.9 * lift;
+
+    // 7. The letter unfolds: the outer third flips up, then the bottom third swings down.
+    const openTop = segment(t, 6.3, 0.8);
+    const openBottom = segment(t, 6.75, 0.8);
+    topFold.current.rotation.x = Math.PI * (1 - easeOutBack(openTop));
+    bottomFold.current.rotation.x = -Math.PI * (1 - easeOutBack(openBottom));
+    // As it opens, the letter leans back a touch then settles, like it is catching the light.
+    letter.current.rotateX(Math.sin(openTop * Math.PI) * -0.18);
+
+    // 8. A warm light blooms behind it, the paper glows, and gold flecks spray out.
+    const bloom = segment(t, 6.3, 1.6);
+    glow.current.position.set(scratch.target.x, scratch.target.y, scratch.target.z - 0.6);
+    glow.current.scale.setScalar(targetScale * LETTER_WIDTH * 2.4 * easeOutCubic(bloom));
+    glowMaterial.current.opacity = Math.sin(Math.min(bloom * 1.6, 1) * Math.PI * 0.5) * (1 - 0.35 * bloom);
+    letterLight.current.position.set(scratch.target.x, scratch.target.y, scratch.target.z + 1.4);
+    letterLight.current.intensity = 6 * Math.sin(bloom * Math.PI);
+
+    glitter.current.position.copy(scratch.target);
+    glitterPieces.forEach((piece, i) => {
+      const p = segment(t, 6.45 + piece.delay, 1.5);
+      const spraying = p > 0 && p < 1;
+      scratch.dummy.position
+        .copy(piece.direction)
+        .multiplyScalar(targetScale * easeOutCubic(p));
+      scratch.dummy.position.y -= 0.7 * p * p;
+      scratch.dummy.rotation.set(piece.spin.x + t * 3, piece.spin.y + t * 2, piece.spin.z);
+      scratch.dummy.scale.setScalar(spraying ? piece.size * targetScale * (1 - easeInCubic(p)) : 0);
+      scratch.dummy.updateMatrix();
+      glitter.current!.setMatrixAt(i, scratch.dummy.matrix);
+    });
+    glitter.current.instanceMatrix.needsUpdate = true;
 
     // A little parallax so the scene responds to the pointer.
     state.camera.position.x = lerp(state.camera.position.x, state.pointer.x * 0.4, 0.05);
@@ -246,8 +389,64 @@ function Envelope({ recipient, runId, onReveal }: { recipient: string; runId: nu
         </instancedMesh>
       </group>
 
-      <mesh ref={letter}>
-        <planeGeometry args={[LETTER_WIDTH, LETTER_HEIGHT]} />
+      {/* The folded letter. Each third has its printed front and a plain paper back; the two
+          outer thirds hinge off the middle one and start folded over it, text side in. */}
+      <group ref={letter} position={[0, 0, -40]}>
+        <LetterPanel geometry={panels.middle} back={panels.plain} texture={texture} />
+        <group ref={topFold} position={[0, PANEL_HEIGHT / 2, 0.01]} rotation={[Math.PI, 0, 0]}>
+          <group position={[0, PANEL_HEIGHT / 2, 0]}>
+            <LetterPanel geometry={panels.top} back={panels.plain} texture={texture} backTexture={coverTexture} />
+          </group>
+        </group>
+        <group ref={bottomFold} position={[0, -PANEL_HEIGHT / 2, 0.005]} rotation={[-Math.PI, 0, 0]}>
+          <group position={[0, -PANEL_HEIGHT / 2, 0]}>
+            <LetterPanel geometry={panels.bottom} back={panels.plain} texture={texture} />
+          </group>
+        </group>
+      </group>
+
+      {/* Kept "visible" at zero size or brightness until needed, so nothing compiles mid-animation. */}
+      <mesh ref={glow} scale={0} renderOrder={-1}>
+        <planeGeometry args={[1, 1]} />
+        <meshBasicMaterial
+          ref={glowMaterial}
+          map={glowTexture}
+          transparent
+          opacity={0}
+          depthWrite={false}
+          blending={THREE.AdditiveBlending}
+          toneMapped={false}
+        />
+      </mesh>
+      <pointLight ref={letterLight} intensity={0} distance={6} color="#ffd9b0" />
+      <instancedMesh ref={glitter} args={[undefined, undefined, GLITTER_COUNT]}>
+        <octahedronGeometry args={[1, 0]} />
+        <meshStandardMaterial
+          color="#f5c86a"
+          emissive="#c98a2a"
+          emissiveIntensity={0.7}
+          metalness={0.7}
+          roughness={0.25}
+        />
+      </instancedMesh>
+    </>
+  );
+}
+
+function LetterPanel({
+  geometry,
+  back,
+  texture,
+  backTexture,
+}: {
+  geometry: THREE.BufferGeometry;
+  back: THREE.BufferGeometry;
+  texture: THREE.Texture;
+  backTexture?: THREE.Texture;
+}) {
+  return (
+    <>
+      <mesh geometry={geometry}>
         {/* The emissive map keeps the paper bright and readable whatever the lighting. */}
         <meshStandardMaterial
           map={texture}
@@ -255,6 +454,17 @@ function Envelope({ recipient, runId, onReveal }: { recipient: string; runId: nu
           emissiveMap={texture}
           emissiveIntensity={0.45}
           roughness={0.9}
+        />
+      </mesh>
+      {/* Turned to face the other way, so the back reads the right way up once folded over. */}
+      <mesh geometry={back} rotation={[Math.PI, 0, 0]}>
+        <meshStandardMaterial
+          color="#f6ecdf"
+          map={backTexture ?? null}
+          emissive="#ffffff"
+          emissiveMap={backTexture ?? null}
+          emissiveIntensity={backTexture ? 0.4 : 0.15}
+          roughness={0.95}
         />
       </mesh>
     </>

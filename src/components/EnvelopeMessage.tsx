@@ -1,8 +1,15 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { Fragment, useCallback, useEffect, useState, type CSSProperties, type PointerEvent } from "react";
 import dynamic from "next/dynamic";
-import { AnimatePresence, motion, useReducedMotion, type Variants } from "motion/react";
+import {
+  AnimatePresence,
+  motion,
+  useMotionValue,
+  useReducedMotion,
+  useSpring,
+  type Variants,
+} from "motion/react";
 import SceneErrorBoundary from "./SceneErrorBoundary";
 
 // three.js needs the browser, so the 3D envelope is never server-rendered.
@@ -18,20 +25,81 @@ const SIGN_OFF = "Your nephew T";
 
 const EASE_OUT: [number, number, number, number] = [0.16, 1, 0.3, 1];
 
+// The words of the letter appear one after another, as if being written while she reads.
+const WORDS_START = 1.6;
+const WORD_GAP = 0.03;
+const PARAGRAPH_PAUSE = 0.4;
+const PARAGRAPH_WORDS = (() => {
+  let delay = WORDS_START;
+  return PARAGRAPHS.map((paragraph) => {
+    const words = paragraph.split(" ").map((word) => {
+      const entry = { word, delay };
+      delay += WORD_GAP;
+      return entry;
+    });
+    delay += PARAGRAPH_PAUSE;
+    return words;
+  });
+})();
+const SIGN_OFF_DELAY =
+  WORDS_START + PARAGRAPHS.join(" ").split(" ").length * WORD_GAP + PARAGRAPHS.length * PARAGRAPH_PAUSE;
+
+// Hearts and sparkles that drift up through the room behind the letter. Spread out by index
+// rather than at random so every visit looks the same and nothing shifts between renders.
+const FLOATERS = Array.from({ length: 16 }, (_, i) => ({
+  symbol: i % 3 === 0 ? "✦" : "♥",
+  left: `${(i * 37 + 7) % 100}%`,
+  size: `${0.8 + ((i * 7) % 5) * 0.3}rem`,
+  duration: `${9 + ((i * 5) % 7)}s`,
+  delay: `${-((i * 1.7) % 10)}s`,
+  drift: `${((i * 13) % 9) - 4}vw`,
+  color: ["#f9a8c4", "#fcd6a4", "#e79ab2", "#fff1d6"][i % 4],
+}));
+
+// The paper arrives tipped back in space, as the 3D letter was, then swings upright.
 const card: Variants = {
-  hidden: { opacity: 0, scale: 0.94, y: 24 },
+  hidden: { opacity: 0, rotateX: 28, y: 40, scale: 0.9, z: -120 },
+  shown: {
+    opacity: 1,
+    rotateX: 0,
+    y: 0,
+    scale: 1,
+    z: 0,
+    transition: { type: "spring", stiffness: 70, damping: 14, mass: 1, opacity: { duration: 0.5 } },
+  },
+  exit: { opacity: 0, rotateX: -18, y: 30, scale: 0.94, transition: { duration: 0.4, ease: "easeIn" } },
+};
+
+const kicker: Variants = {
+  hidden: { opacity: 0, y: 10, letterSpacing: "0.6em" },
+  shown: { opacity: 1, y: 0, letterSpacing: "0.3em", transition: { duration: 1, delay: 0.5, ease: EASE_OUT } },
+};
+
+// The greeting is revealed left to right, like a pen writing it.
+const greeting: Variants = {
+  hidden: { clipPath: "inset(0 100% 0 0)", opacity: 0.6 },
+  shown: {
+    clipPath: "inset(0 0% 0 0)",
+    opacity: 1,
+    transition: { duration: 1.1, delay: 0.75, ease: [0.45, 0, 0.25, 1] },
+  },
+};
+
+const divider: Variants = {
+  hidden: { scaleX: 0 },
+  shown: { scaleX: 1, transition: { duration: 0.8, delay: 1.3, ease: EASE_OUT } },
+};
+
+const seal: Variants = {
+  hidden: { opacity: 0, scale: 2.6, rotate: -40, y: -60 },
   shown: {
     opacity: 1,
     scale: 1,
+    rotate: -8,
     y: 0,
-    transition: { duration: 0.8, ease: EASE_OUT, delayChildren: 0.25, staggerChildren: 0.13 },
+    transition: { type: "spring", stiffness: 260, damping: 13, delay: 0.55 },
   },
-  exit: { opacity: 0, scale: 0.96, transition: { duration: 0.35 } },
-};
-
-const line: Variants = {
-  hidden: { opacity: 0, y: 12 },
-  shown: { opacity: 1, y: 0, transition: { duration: 0.6, ease: EASE_OUT } },
+  exit: { opacity: 0, scale: 0.6, transition: { duration: 0.25 } },
 };
 
 const closeButton: Variants = {
@@ -56,6 +124,24 @@ export default function EnvelopeMessage({
   const revealed = Boolean(reduceMotion) || revealedRun === runId;
   const reveal = useCallback(() => setRevealedRun(runId), [runId]);
   const playing = open && !revealed;
+  // Tapping the letter finishes the writing straight away, for anyone who would rather just read.
+  const [writtenRun, setWrittenRun] = useState(-1);
+  const written = writtenRun === runId;
+
+  // The letter tilts gently toward the mouse, so it feels like paper held up in the light.
+  const tiltX = useMotionValue(0);
+  const tiltY = useMotionValue(0);
+  const rotateX = useSpring(tiltX, { stiffness: 120, damping: 18 });
+  const rotateY = useSpring(tiltY, { stiffness: 120, damping: 18 });
+  const tilt = (event: PointerEvent<HTMLDivElement>) => {
+    if (event.pointerType !== "mouse" || reduceMotion) return;
+    tiltX.set((0.5 - event.clientY / window.innerHeight) * 10);
+    tiltY.set((event.clientX / window.innerWidth - 0.5) * 12);
+  };
+  const untilt = () => {
+    tiltX.set(0);
+    tiltY.set(0);
+  };
 
   useEffect(() => {
     if (!open) return;
@@ -105,50 +191,108 @@ export default function EnvelopeMessage({
         {open && revealed && (
           <motion.div
             key={`letter-${runId}`}
-            className="absolute inset-0 flex flex-col items-center justify-center gap-5 px-4"
+            className="absolute inset-0 flex flex-col items-center justify-center gap-5 px-4 [perspective:1400px]"
             initial="hidden"
             animate="shown"
             exit="exit"
+            onPointerMove={tilt}
+            onPointerLeave={untilt}
           >
-            <motion.article
-              variants={card}
-              className="max-h-[78dvh] w-[min(92vw,520px)] overflow-y-auto rounded-2xl border border-[#ead8c8] bg-[#fffaf2] px-6 py-8 text-[#4a2a3a] shadow-2xl shadow-black/50 sm:px-10 sm:py-10"
-            >
-              <motion.p
-                variants={line}
-                className="text-[0.65rem] uppercase tracking-[0.3em] text-[#b0708a] sm:text-xs"
-              >
-                A letter for you
-              </motion.p>
-              <motion.h2
-                variants={line}
-                className="mt-3 font-display text-3xl italic text-[#7a3550] sm:text-4xl"
-              >
-                Dear {RECIPIENT},
-              </motion.h2>
+            {!reduceMotion && (
+              <div aria-hidden className="pointer-events-none absolute inset-0 overflow-hidden">
+                {FLOATERS.map((floater, i) => (
+                  <span
+                    key={i}
+                    className="letter-floater absolute bottom-0"
+                    style={
+                      {
+                        left: floater.left,
+                        fontSize: floater.size,
+                        color: floater.color,
+                        animationDuration: floater.duration,
+                        animationDelay: floater.delay,
+                        "--drift": floater.drift,
+                      } as CSSProperties
+                    }
+                  >
+                    {floater.symbol}
+                  </span>
+                ))}
+              </div>
+            )}
+
+            {/* A burst of warm light covers the moment the 3D letter becomes the readable one. */}
+            {!reduceMotion && (
               <motion.div
-                variants={line}
-                className="mt-4 h-px w-16 bg-gradient-to-r from-[#e79ab2] to-transparent"
+                aria-hidden
+                className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_center,rgba(255,240,214,0.95)_0%,rgba(255,190,170,0.5)_30%,rgba(255,150,190,0)_70%)]"
+                initial={{ opacity: 1, scale: 0.8 }}
+                animate={{ opacity: 0, scale: 1.4 }}
+                transition={{ duration: 1.3, ease: "easeOut" }}
               />
-              {PARAGRAPHS.map((paragraph) => (
-                <motion.p
-                  key={paragraph}
-                  variants={line}
-                  className="mt-4 text-[0.95rem] leading-relaxed sm:text-base"
-                >
-                  {paragraph}
-                </motion.p>
-              ))}
-              <motion.p variants={line} className="mt-8 font-display text-lg italic text-[#7a3550]">
-                {SIGN_OFF}
-              </motion.p>
-            </motion.article>
+            )}
+
+            <motion.div className="relative" style={{ rotateX, rotateY, transformStyle: "preserve-3d" }}>
+              <motion.div
+                variants={card}
+                onClick={() => setWrittenRun(runId)}
+                className={`relative overflow-hidden rounded-2xl border border-[#ead8c8] bg-[#fffaf2] text-[#4a2a3a] shadow-[0_30px_80px_-20px_rgba(0,0,0,0.7),0_0_60px_-10px_rgba(255,190,150,0.45)] ${written ? "letter-written" : ""}`}
+              >
+                {/* A band of light sweeps across the paper as it settles. */}
+                {!reduceMotion && <div aria-hidden className="letter-sheen pointer-events-none absolute inset-0 z-10" />}
+
+                <article className="max-h-[76dvh] w-[min(92vw,520px)] overflow-y-auto px-6 pb-8 pt-10 sm:px-10 sm:pb-10 sm:pt-12">
+                  <motion.p
+                    variants={kicker}
+                    className="text-[0.65rem] uppercase tracking-[0.3em] text-[#b0708a] sm:text-xs"
+                  >
+                    A letter for you
+                  </motion.p>
+                  <motion.h2
+                    variants={greeting}
+                    className="mt-3 font-display text-3xl italic text-[#7a3550] sm:text-4xl"
+                  >
+                    Dear {RECIPIENT},
+                  </motion.h2>
+                  <motion.div
+                    variants={divider}
+                    className="mt-4 h-px w-16 origin-left bg-gradient-to-r from-[#e79ab2] to-transparent"
+                  />
+                  {PARAGRAPH_WORDS.map((words, i) => (
+                    <p key={i} className="letter-paragraph mt-4 text-[0.95rem] leading-relaxed sm:text-base">
+                      {words.map(({ word, delay }, j) => (
+                        <Fragment key={j}>
+                          <span className="letter-word" style={{ animationDelay: `${delay}s` }}>
+                            {word}
+                          </span>{" "}
+                        </Fragment>
+                      ))}
+                    </p>
+                  ))}
+                  <p className="mt-8 font-display text-lg italic text-[#7a3550]">
+                    <span className="letter-word" style={{ animationDelay: `${SIGN_OFF_DELAY}s` }}>
+                      {SIGN_OFF}
+                    </span>
+                  </p>
+                </article>
+              </motion.div>
+
+              {/* A wax seal stamps down onto the top of the letter. */}
+              <motion.div
+                aria-hidden
+                variants={seal}
+                className="absolute -top-6 left-1/2 -ml-6 flex h-12 w-12 items-center justify-center rounded-full bg-[radial-gradient(circle_at_35%_30%,#d23a62,#a3153b_60%,#7d0f2d)] text-lg text-[#f5c86a] shadow-[0_6px_16px_rgba(0,0,0,0.45),inset_0_-3px_6px_rgba(0,0,0,0.3)]"
+                style={{ translateZ: 30 }}
+              >
+                ♥
+              </motion.div>
+            </motion.div>
 
             <motion.button
               type="button"
               variants={closeButton}
               onClick={onClose}
-              className="rounded-full border border-white/25 bg-white/10 px-6 py-2.5 text-sm font-medium text-white hover:bg-white/20"
+              className="relative rounded-full border border-white/25 bg-white/10 px-6 py-2.5 text-sm font-medium text-white hover:bg-white/20"
             >
               Close letter
             </motion.button>
